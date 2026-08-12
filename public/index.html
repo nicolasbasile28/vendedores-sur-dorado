@@ -47,6 +47,17 @@
   .field label{display:block; font-size:12.5px; color:var(--text2); margin-bottom:6px; font-weight:600;}
   .field select{width:100%; padding:12px; border-radius:8px; border:1px solid var(--border); background:var(--panel2); color:var(--text); font-size:15px;}
 
+  /* ---- Selector propio (reemplaza <select> nativo, evita bug del picker de Android en PWA) ---- */
+  .cselect{position:relative;}
+  .cselect-btn{width:100%; text-align:left; padding:12px; border-radius:8px; border:1px solid var(--border); background:var(--panel2); color:var(--text); font-size:15px; display:flex; justify-content:space-between; align-items:center;}
+  .cselect-btn:disabled{color:var(--text3);}
+  .cselect-btn::after{content:'▾'; color:var(--text3); margin-left:8px;}
+  .cselect-panel{display:none; position:absolute; top:calc(100% + 4px); left:0; right:0; z-index:50; background:var(--panel2); border:1px solid var(--border); border-radius:10px; max-height:260px; overflow-y:auto; box-shadow:0 10px 30px rgba(0,0,0,0.5);}
+  .cselect-panel.open{display:block;}
+  .cselect-option{padding:12px 14px; font-size:14.5px; cursor:pointer; border-bottom:1px solid var(--border);}
+  .cselect-option:last-child{border-bottom:none;}
+  .cselect-option:active, .cselect-option.highlight{background:var(--panel);}
+
   .summary-total{background:#2a78d6; border-radius:14px; padding:18px; margin:18px 0 14px;}
   .summary-total .label{font-size:12px; color:#cfe0fb; font-weight:700; text-transform:uppercase; letter-spacing:.5px;}
   .summary-total .value{font-size:32px; font-weight:900; margin-top:4px;}
@@ -77,92 +88,4 @@
   .sin-compra{color:var(--text3); font-size:13.5px; padding:6px 0;}
 
   /* ---- Marca (articulos) screen ---- */
-  .art-row{display:flex; justify-content:space-between; align-items:center; background:var(--panel); border-radius:10px; padding:12px 14px; margin-bottom:8px;}
-  .art-row .aname{font-size:14px;}
-  .art-row .ahl{font-weight:700; font-size:14px;}
-
-  .loading{text-align:center; padding:30px; color:var(--text3);}
-</style>
-</head>
-<body>
-
-<!-- ============ LOGIN ============ -->
-<div id="screenLogin" class="screen active">
-  <div class="login-box">
-    <div class="brand">SUR<span>DORADO</span></div>
-    <h2>Acceso vendedores</h2>
-    <div class="login-error" id="loginError"></div>
-    <input type="text" id="loginUser" placeholder="Usuario" autocomplete="username">
-    <input type="password" id="loginPass" placeholder="Contraseña" autocomplete="current-password">
-    <button id="btnLogin">Ingresar</button>
-  </div>
-</div>
-
-<!-- ============ SELECTOR (Pantalla 1) ============ -->
-<div id="screenSelector" class="screen">
-  <div class="topbar">
-    <div class="topbar-inner">
-    <div class="title" id="selectorTitle">Sur Dorado</div>
-    <button class="logout-btn" id="btnLogout">Salir</button>
-    </div>
-  </div>
-  <div class="content">
-    <div class="greeting" id="greetingText">Buen día, vamos a trabajar</div>
-
-    <div class="field">
-      <label>Vendedor</label>
-      <select id="selVendedor"><option value="">Elegí un vendedor...</option></select>
-    </div>
-    <div class="field">
-      <label>Día de visita</label>
-      <select id="selDia" disabled><option value="">Elegí un vendedor primero</option></select>
-    </div>
-
-    <div id="resultsArea" style="display:none;">
-      <div class="summary-total">
-        <div class="label">Clientes de hoy</div>
-        <div class="value" id="totalClientes">0</div>
-      </div>
-
-      <div class="cat-grid">
-        <div class="cat-card" style="--c:var(--cerveza);"><div class="lbl">🍺 Cervezas</div><div class="num" id="numCervezas">0</div></div>
-        <div class="cat-card" style="--c:var(--agua);"><div class="lbl">💧 Aguas</div><div class="num" id="numAguas">0</div></div>
-        <div class="cat-card" style="--c:var(--vinos);"><div class="lbl">🍷 Vinos</div><div class="num" id="numVinos">0</div></div>
-        <div class="cat-card" style="--c:var(--sidras);"><div class="lbl">🍏 Sidras</div><div class="num" id="numSidras">0</div></div>
-      </div>
-
-      <input type="text" class="search-box" id="searchBox" placeholder="Buscar por código o nombre...">
-      <div id="clientList"></div>
-    </div>
-  </div>
-</div>
-
-<!-- ============ CLIENTE (Pantalla 2) ============ -->
-<div id="screenCliente" class="screen">
-  <div class="topbar">
-    <div class="topbar-inner">
-    <button class="back-btn" id="btnBackFromCliente">‹</button>
-    <div class="title">Detalle del cliente</div>
-    </div>
-  </div>
-  <div class="content" id="clienteContent">
-    <div class="loading">Cargando...</div>
-  </div>
-</div>
-
-<!-- ============ MARCA / ARTICULOS (Pantalla 3) ============ -->
-<div id="screenMarca" class="screen">
-  <div class="topbar">
-    <div class="topbar-inner">
-    <button class="back-btn" id="btnBackFromMarca">‹</button>
-    <div class="title" id="marcaTitle">Artículos</div>
-    </div>
-  </div>
-  <div class="content" id="marcaContent">
-    <div class="loading">Cargando...</div>
-  </div>
-</div>
-
-<script src="app.js"></script>
-</body>
-</html>
+  .art-row{display:flex; justify-content:space-between; align-items:center; background:var(--panel); border-radius:10px; padding:12px 14px;
