@@ -300,6 +300,18 @@ const server = http.createServer(async (req, res) => {
   serveStatic(req, res, pathname);
 });
 
+// Auto-seed: si no hay ningun usuario todavia, crea el admin y el vendedor por defecto.
+// Esto reemplaza la necesidad de correr "npm run seed" a mano (util en el plan gratuito
+// de Render, que no tiene consola/Shell disponible).
+(function autoSeed(){
+  const count = db.prepare('SELECT COUNT(*) as n FROM users').get().n;
+  if (count === 0) {
+    authLib.createUser('surdorado', 'luca1901', 'admin');
+    authLib.createUser('vendedores', 'vende2026', 'vendedor');
+    console.log('Auto-seed: usuarios iniciales creados (surdorado / vendedores).');
+  }
+})();
+
 server.listen(PORT, () => {
   console.log(`Servidor escuchando en puerto ${PORT}`);
 });
