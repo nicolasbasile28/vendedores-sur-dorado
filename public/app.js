@@ -87,40 +87,74 @@ async function afterLogin() {
 // ---------- Pantalla 1: selector + lista de clientes ----------
 let currentClientList = [];
 
-async function loadVendedores() {
-  const sel = document.getElementById('selVendedor');
-  sel.innerHTML = '<option value="">Cargando...</option>';
-  try {
-    const vendedores = await api('/api/vendedores');
-    sel.innerHTML = '<option value="">Elegí un vendedor...</option>' +
-      vendedores.map(v => `<option value="${escapeHtml(v)}">${escapeHtml(v)}</option>`).join('');
-  } catch (e) {
-    sel.innerHTML = '<option value="">Error al cargar</option>';
-  }
+// Selector propio (reemplaza <select> nativo): botón + panel de opciones tocables.
+// Evita un bug de Android donde el picker nativo se queda trabado al usar la app
+// instalada (modo standalone / PWA).
+function makeCustomSelect(btnId, panelId, onSelect){
+  const btn = document.getElementById(btnId);
+  const panel = document.getElementById(panelId);
+  function close(){ panel.classList.remove('open'); }
+  function open(){ panel.classList.add('open'); }
+  btn.addEventListener('click', (e) => {
+    e.stopPropagation();
+    if (btn.disabled) return;
+    if (panel.classList.contains('open')) close(); else open();
+  });
+  document.addEventListener('click', (e) => {
+    if (!panel.contains(e.target) && e.target !== btn) close();
+  });
+  return {
+    setOptions(options, placeholder){
+      panel.innerHTML = options.map(o =>
+        `<div class="cselect-option" data-value="${escapeHtml(o.value)}">${escapeHtml(o.label)}</div>`
+      ).join('');
+      panel.querySelectorAll('.cselect-option').forEach(el => {
+        el.addEventListener('click', () => {
+          const value = el.getAttribute('data-value');
+          btn.textContent = el.textContent;
+          btn.dataset.value = value;
+          close();
+          onSelect(value);
+        });
+      });
+      if (placeholder !== undefined) btn.textContent = placeholder;
+      btn.dataset.value = '';
+    },
+    enable(){ btn.disabled = false; },
+    disable(text){ btn.disabled = true; if (text) btn.textContent = text; btn.dataset.value = ''; },
+    getValue(){ return btn.dataset.value || ''; },
+    close,
+  };
 }
 
-document.getElementById('selVendedor').onchange = async (e) => {
-  const vendedor = e.target.value;
-  const selDia = document.getElementById('selDia');
+const vendedorSelect = makeCustomSelect('cselVendedorBtn', 'cselVendedorPanel', async (vendedor) => {
   document.getElementById('resultsArea').style.display = 'none';
   if (!vendedor) {
-    selDia.disabled = true;
-    selDia.innerHTML = '<option value="">Elegí un vendedor primero</option>';
+    diaSelect.disable('Elegí un vendedor primero');
     return;
   }
-  selDia.disabled = false;
-  selDia.innerHTML = '<option value="">Cargando...</option>';
+  diaSelect.enable();
+  diaSelect.setOptions([], 'Cargando...');
   const dias = await api('/api/dias?vendedor=' + encodeURIComponent(vendedor));
-  selDia.innerHTML = '<option value="">Elegí un día...</option>' +
-    dias.map(d => `<option value="${escapeHtml(d)}">${escapeHtml(d)}</option>`).join('');
-};
+  diaSelect.setOptions(dias.map(d => ({ value: d, label: d })), 'Elegí un día...');
+});
 
-document.getElementById('selDia').onchange = async (e) => {
-  const vendedor = document.getElementById('selVendedor').value;
-  const dia = e.target.value;
+const diaSelect = makeCustomSelect('cselDiaBtn', 'cselDiaPanel', async (dia) => {
+  const vendedor = vendedorSelect.getValue();
   if (!vendedor || !dia) { document.getElementById('resultsArea').style.display = 'none'; return; }
   await loadClientes(vendedor, dia);
-};
+});
+diaSelect.disable('Elegí un vendedor primero');
+
+async function loadVendedores() {
+  vendedorSelect.setOptions([], 'Cargando...');
+  try {
+    const vendedores = await api('/api/vendedores');
+    vendedorSelect.setOptions(vendedores.map(v => ({ value: v, label: v })), 'Elegí un vendedor...');
+  } catch (e) {
+    vendedorSelect.setOptions([], 'Error al cargar');
+  }
+}
 
 async function loadClientes(vendedor, dia) {
   const area = document.getElementById('resultsArea');
