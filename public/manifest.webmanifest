@@ -1,0 +1,11 @@
+{
+  "name": "Sur Dorado - Vendedores",
+  "short_name": "Sur Dorado",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#16233d",
+  "theme_color": "#16233d",
+  "icons": [
+    { "src": "icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any maskable" }
+  ]
+}

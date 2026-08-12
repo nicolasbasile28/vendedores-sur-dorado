@@ -1,0 +1,12 @@
+{
+  "name": "sur-dorado-vendedores",
+  "version": "1.0.0",
+  "private": true,
+  "engines": {
+    "node": ">=22.5.0"
+  },
+  "scripts": {
+    "seed": "node server/seed.js",
+    "start": "node server/server.js"
+  }
+}
