@@ -1,7 +1,5 @@
 // app.js - Logica de la app de vendedores (sin frameworks, vanilla JS)
-
 const API = ''; // mismo origen
-
 // ---------- Sesion persistente (tipo WhatsApp) ----------
 function saveSession(token, role, username) {
   localStorage.setItem('sd_token', token);
@@ -18,7 +16,6 @@ function clearSession() {
   localStorage.removeItem('sd_role');
   localStorage.removeItem('sd_username');
 }
-
 async function api(path, opts = {}) {
   const session = getSession();
   const headers = Object.assign({ 'Content-Type': 'application/json' }, opts.headers || {});
@@ -33,7 +30,6 @@ async function api(path, opts = {}) {
   if (!res.ok) throw new Error(data.error || 'Error');
   return data;
 }
-
 // ---------- Navegacion entre pantallas ----------
 let screenStack = [];
 function showScreen(id, opts = {}) {
@@ -46,11 +42,9 @@ function goBack() {
   const prev = screenStack.pop() || 'screenSelector';
   showScreen(prev);
 }
-
 // ---------- Login ----------
 document.getElementById('btnLogin').onclick = doLogin;
 document.getElementById('loginPass').addEventListener('keydown', e => { if (e.key === 'Enter') doLogin(); });
-
 async function doLogin() {
   const username = document.getElementById('loginUser').value.trim();
   const password = document.getElementById('loginPass').value;
@@ -70,23 +64,28 @@ async function doLogin() {
     errEl.textContent = 'No se pudo conectar con el servidor.';
   }
 }
-
 document.getElementById('btnLogout').onclick = () => {
   api('/api/logout', { method: 'POST' }).catch(() => {});
   clearSession();
   screenStack = [];
   showScreen('screenLogin', { noPush: true });
 };
-
 async function afterLogin() {
   screenStack = [];
   showScreen('screenSelector', { noPush: true });
+  updateVisorLink();
   await loadVendedores();
 }
-
+// Muestra el link al Visor Comercial solo si el usuario logueado es admin o supervisor
+function updateVisorLink() {
+  const link = document.getElementById('linkVisor');
+  if (!link) return;
+  const session = getSession();
+  const puedeVerVisor = session && ['admin', 'supervisor'].includes(session.role);
+  link.style.display = puedeVerVisor ? 'inline' : 'none';
+}
 // ---------- Pantalla 1: selector + lista de clientes ----------
 let currentClientList = [];
-
 // Selector propio (reemplaza <select> nativo): botón + panel de opciones tocables.
 // Evita un bug de Android donde el picker nativo se queda trabado al usar la app
 // instalada (modo standalone / PWA).
@@ -126,7 +125,6 @@ function makeCustomSelect(btnId, panelId, onSelect){
     close,
   };
 }
-
 const vendedorSelect = makeCustomSelect('cselVendedorBtn', 'cselVendedorPanel', async (vendedor) => {
   document.getElementById('resultsArea').style.display = 'none';
   if (!vendedor) {
@@ -138,14 +136,12 @@ const vendedorSelect = makeCustomSelect('cselVendedorBtn', 'cselVendedorPanel', 
   const dias = await api('/api/dias?vendedor=' + encodeURIComponent(vendedor));
   diaSelect.setOptions(dias.map(d => ({ value: d, label: d })), 'Elegí un día...');
 });
-
 const diaSelect = makeCustomSelect('cselDiaBtn', 'cselDiaPanel', async (dia) => {
   const vendedor = vendedorSelect.getValue();
   if (!vendedor || !dia) { document.getElementById('resultsArea').style.display = 'none'; return; }
   await loadClientes(vendedor, dia);
 });
 diaSelect.disable('Elegí un vendedor primero');
-
 async function loadVendedores() {
   vendedorSelect.setOptions([], 'Cargando...');
   try {
@@ -155,7 +151,6 @@ async function loadVendedores() {
     vendedorSelect.setOptions([], 'Error al cargar');
   }
 }
-
 async function loadClientes(vendedor, dia) {
   const area = document.getElementById('resultsArea');
   area.style.display = '';
@@ -170,7 +165,6 @@ async function loadClientes(vendedor, dia) {
   document.getElementById('searchBox').value = '';
   renderClientList(currentClientList);
 }
-
 function renderClientList(list) {
   const el = document.getElementById('clientList');
   if (!list.length) { el.innerHTML = '<div class="empty-msg">No hay clientes para mostrar.</div>'; return; }
@@ -188,7 +182,6 @@ function renderClientList(list) {
     item.onclick = () => openCliente(item.getAttribute('data-id'));
   });
 }
-
 document.getElementById('searchBox').addEventListener('input', (e) => {
   const q = e.target.value.trim().toLowerCase();
   if (!q) { renderClientList(currentClientList); return; }
@@ -198,16 +191,13 @@ document.getElementById('searchBox').addEventListener('input', (e) => {
   );
   renderClientList(filtered);
 });
-
 function escapeHtml(s) {
   return String(s == null ? '' : s).replace(/[&<>"']/g, m => ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' }[m]));
 }
-
 // ---------- Pantalla 2: detalle de cliente ----------
 const CAT_ICONS = { 'Cervezas':'🍺', 'Aguas':'💧', 'Vinos':'🍷', 'Sidras':'🍏' };
 const CAT_COLORS = { 'Cervezas':'var(--cerveza)', 'Aguas':'var(--agua)', 'Vinos':'var(--vinos)', 'Sidras':'var(--sidras)' };
 let currentClienteId = null;
-
 async function openCliente(id) {
   currentClienteId = id;
   showScreen('screenCliente');
@@ -220,7 +210,6 @@ async function openCliente(id) {
     content.innerHTML = '<div class="empty-msg">No se pudo cargar el cliente.</div>';
   }
 }
-
 function renderCliente(data) {
   const content = document.getElementById('clienteContent');
   const CATS = ['Cervezas', 'Aguas', 'Vinos', 'Sidras'];
@@ -251,9 +240,7 @@ function renderCliente(data) {
     el.onclick = () => openMarca(currentClienteId, el.getAttribute('data-marca'));
   });
 }
-
 document.getElementById('btnBackFromCliente').onclick = goBack;
-
 // ---------- Pantalla 3: articulos de una marca ----------
 async function openMarca(clienteId, marca) {
   showScreen('screenMarca');
@@ -277,11 +264,9 @@ async function openMarca(clienteId, marca) {
   }
 }
 document.getElementById('btnBackFromMarca').onclick = goBack;
-
 function fmt1(n) {
   return Number(n).toLocaleString('es-AR', { minimumFractionDigits: 1, maximumFractionDigits: 1 });
 }
-
 // ---------- Saludo dinamico ----------
 function setGreeting() {
   const h = new Date().getHours();
@@ -290,7 +275,6 @@ function setGreeting() {
   else if (h >= 19 || h < 6) g = 'Buenas noches, vamos a trabajar';
   document.getElementById('greetingText').textContent = g;
 }
-
 // ---------- Arranque ----------
 (function init() {
   setGreeting();
@@ -301,7 +285,6 @@ function setGreeting() {
     showScreen('screenLogin', { noPush: true });
   }
 })();
-
 // ---------- Service worker (para poder instalarla) ----------
 if ('serviceWorker' in navigator) {
   navigator.serviceWorker.register('/sw.js').catch(() => {});
