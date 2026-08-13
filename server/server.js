@@ -390,6 +390,24 @@ route('GET', '/api/ranking/clientes', async (req, res) => {
   })));
 });
  
+// ---------- Referencia Vendedor-Supervisor (para que las subidas de ventas-solo no dependan de un archivo local) ----------
+// GET /api/referencia/supervisores - cualquiera logueado puede leerla
+route('GET', '/api/referencia/supervisores', async (req, res) => {
+  if (!requireAuth(req, res, ['admin', 'supervisor', 'vendedor'])) return;
+  const row = db.prepare('SELECT value FROM meta WHERE key = ?').get('sup_ref_json');
+  let mapping = {};
+  if (row) { try { mapping = JSON.parse(row.value); } catch (e) { mapping = {}; } }
+  sendJson(res, 200, { mapping });
+});
+// POST /api/referencia/supervisores - solo admin puede actualizarla { mapping: { "NORMALIZADO": "Supervisor" } }
+route('POST', '/api/referencia/supervisores', async (req, res) => {
+  if (!requireAuth(req, res, ['admin'])) return;
+  const body = JSON.parse((await readBody(req)).toString('utf-8') || '{}');
+  if (!body.mapping || typeof body.mapping !== 'object') return sendJson(res, 400, { error: 'Falta mapping' });
+  db.prepare('INSERT OR REPLACE INTO meta (key, value) VALUES (?,?)').run('sup_ref_json', JSON.stringify(body.mapping));
+  sendJson(res, 200, { ok: true, cantidad: Object.keys(body.mapping).length });
+});
+ 
 const MIME = {
   '.html': 'text/html; charset=utf-8',
   '.js': 'application/javascript; charset=utf-8',
