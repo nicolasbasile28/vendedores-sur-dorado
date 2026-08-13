@@ -321,6 +321,47 @@ route('POST', '/api/admin/users/:id/reset-password', async (req, res, params) =>
   sendJson(res, 200, { ok: true });
 });
  
+// ---------- Ranking de marcas y clientes (para la vista online) ----------
+// GET /api/ranking/marcas?mes=&anio=&categoria= - ranking de marcas de una categoria
+route('GET', '/api/ranking/marcas', async (req, res) => {
+  if (!requireAuth(req, res, ['admin', 'supervisor', 'vendedor'])) return;
+  const parsed = url.parse(req.url, true);
+  const mes = Number(parsed.query.mes);
+  const anio = Number(parsed.query.anio);
+  const categoria = parsed.query.categoria || '';
+  if (!mes || !anio || !categoria) return sendJson(res, 400, { error: 'Faltan parametros mes, anio y categoria' });
+  const rows = db.prepare(`
+    SELECT marca, SUM(um_hl) as hl FROM ventas
+    WHERE categoria = ? AND mes = ? AND anio = ?
+    GROUP BY marca HAVING SUM(um_hl) >= 0.001
+    ORDER BY hl DESC
+  `).all(categoria, mes, anio);
+  sendJson(res, 200, rows.map(r => ({ marca: r.marca, hl: Math.round(r.hl * 1000) / 1000 })));
+});
+// GET /api/ranking/clientes?mes=&anio=&categoria=&marca= - top 15 clientes de esa marca
+route('GET', '/api/ranking/clientes', async (req, res) => {
+  if (!requireAuth(req, res, ['admin', 'supervisor', 'vendedor'])) return;
+  const parsed = url.parse(req.url, true);
+  const mes = Number(parsed.query.mes);
+  const anio = Number(parsed.query.anio);
+  const categoria = parsed.query.categoria || '';
+  const marca = parsed.query.marca || '';
+  if (!mes || !anio || !categoria || !marca) return sendJson(res, 400, { error: 'Faltan parametros mes, anio, categoria y marca' });
+  const rows = db.prepare(`
+    SELECT v.cliente_id as cliente_id, c.razon_social as razon_social, c.domicilio as domicilio, SUM(v.um_hl) as hl
+    FROM ventas v LEFT JOIN clientes c ON c.cliente_id = v.cliente_id
+    WHERE v.categoria = ? AND v.marca = ? AND v.mes = ? AND v.anio = ?
+    GROUP BY v.cliente_id HAVING SUM(v.um_hl) >= 0.001
+    ORDER BY hl DESC LIMIT 15
+  `).all(categoria, marca, mes, anio);
+  sendJson(res, 200, rows.map(r => ({
+    cliente_id: r.cliente_id,
+    razon_social: r.razon_social || '',
+    domicilio: r.domicilio || '',
+    hl: Math.round(r.hl * 1000) / 1000,
+  })));
+});
+ 
 const MIME = {
   '.html': 'text/html; charset=utf-8',
   '.js': 'application/javascript; charset=utf-8',
