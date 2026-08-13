@@ -1,4 +1,3 @@
-
 // server.js - Servidor HTTP principal (sin dependencias externas, solo Node)
 const http = require('http');
 const fs = require('fs');
@@ -196,6 +195,10 @@ route('POST', '/api/upload', async (req, res) => {
     const setMeta = db.prepare('INSERT OR REPLACE INTO meta (key, value) VALUES (?,?)');
     setMeta.run('mes_actual', mes_actual || '');
     setMeta.run('last_upload', new Date().toISOString());
+    if (mes && anio) {
+      setMeta.run('mes_actual_num', String(mes));
+      setMeta.run('anio_actual_num', String(anio));
+    }
     if (mes && anio && dias_venta_reales) {
       setMeta.run(`dias_reales_${anio}_${String(mes).padStart(2, '0')}`, String(dias_venta_reales));
     }
