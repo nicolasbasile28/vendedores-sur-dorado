@@ -38,7 +38,7 @@ function showScreen(id, opts = {}) {
   if (!opts.noPush) screenStack.push(id);
 }
 function goBack() {
-  screenStack.pop(); // pantalla actual
+  screenStack.pop();
   const prev = screenStack.pop() || 'screenSelector';
   showScreen(prev);
 }
@@ -76,7 +76,6 @@ async function afterLogin() {
   updateVisorLink();
   await loadVendedores();
 }
-// Muestra el link al Visor Comercial solo si el usuario logueado es admin o supervisor
 function updateVisorLink() {
   const link = document.getElementById('linkVisor');
   if (!link) return;
@@ -86,9 +85,6 @@ function updateVisorLink() {
 }
 // ---------- Pantalla 1: selector + lista de clientes ----------
 let currentClientList = [];
-// Selector propio (reemplaza <select> nativo): botón + panel de opciones tocables.
-// Evita un bug de Android donde el picker nativo se queda trabado al usar la app
-// instalada (modo standalone / PWA).
 function makeCustomSelect(btnId, panelId, onSelect){
   const btn = document.getElementById(btnId);
   const panel = document.getElementById(panelId);
