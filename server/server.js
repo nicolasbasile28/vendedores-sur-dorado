@@ -210,14 +210,39 @@ route('POST', '/api/upload', async (req, res) => {
   sendJson(res, 200, { ok: true, clientes: clientes.length, ventas: ventas.length });
 });
  
+// Arma la clausula WHERE y el JOIN necesarios segun los filtros opcionales que vengan en el query string
+function buildFiltros(query) {
+  const filtros = { supervisor: query.supervisor || '', camionero: query.camionero || '', vendedor: query.vendedor || '', dia: query.dia || '' };
+  let needsJoin = !!(filtros.vendedor || filtros.dia);
+  let clause = '';
+  const params = [];
+  if (filtros.supervisor) { clause += ' AND v.supervisor = ?'; params.push(filtros.supervisor); }
+  if (filtros.camionero) { clause += ' AND v.camionero = ?'; params.push(filtros.camionero); }
+  if (filtros.vendedor) { clause += ' AND c.personal_comercial = ?'; params.push(filtros.vendedor); }
+  if (filtros.dia) { clause += ' AND c.dias_visita = ?'; params.push(filtros.dia); }
+  const join = needsJoin ? 'LEFT JOIN clientes c ON c.cliente_id = v.cliente_id' : '';
+  return { clause, params, join };
+}
+ 
+// ---------- Opciones de filtros (para los desplegables) ----------
+route('GET', '/api/filtros/opciones', async (req, res) => {
+  if (!requireAuth(req, res, ['admin', 'supervisor', 'vendedor'])) return;
+  const supervisores = db.prepare(`SELECT DISTINCT supervisor FROM ventas WHERE supervisor IS NOT NULL AND supervisor != '' ORDER BY supervisor`).all().map(r => r.supervisor);
+  const camioneros = db.prepare(`SELECT DISTINCT camionero FROM ventas WHERE camionero IS NOT NULL AND camionero != '' ORDER BY camionero`).all().map(r => r.camionero);
+  const vendedores = db.prepare(`SELECT DISTINCT personal_comercial FROM clientes WHERE personal_comercial IS NOT NULL AND personal_comercial != '' ORDER BY personal_comercial`).all().map(r => r.personal_comercial);
+  const dias = db.prepare(`SELECT DISTINCT dias_visita FROM clientes WHERE dias_visita IS NOT NULL AND dias_visita != '' ORDER BY dias_visita`).all().map(r => r.dias_visita);
+  sendJson(res, 200, { supervisores, camioneros, vendedores, dias });
+});
+ 
 // ---------- KPIs por division (para la vista online) ----------
-// GET /api/kpis?mes=8&anio=2026 - totales por categoria, comparacion interanual y proyeccion
+// GET /api/kpis?mes=8&anio=2026&supervisor=&camionero=&vendedor=&dia= - totales por categoria, comparacion interanual y proyeccion
 route('GET', '/api/kpis', async (req, res) => {
   if (!requireAuth(req, res, ['admin', 'supervisor', 'vendedor'])) return;
   const parsed = url.parse(req.url, true);
   const mes = Number(parsed.query.mes);
   const anio = Number(parsed.query.anio);
   if (!mes || !anio) return sendJson(res, 400, { error: 'Faltan parametros mes y anio' });
+  const { clause, params, join } = buildFiltros(parsed.query);
  
   const diasConfigRow = db.prepare('SELECT value FROM meta WHERE key = ?').get('dias_configurados');
   const diasConfigurados = diasConfigRow ? Number(diasConfigRow.value) : null;
@@ -227,8 +252,8 @@ route('GET', '/api/kpis', async (req, res) => {
   const CATS = ['Cervezas', 'Aguas', 'Vinos', 'Sidras'];
   const resultado = {};
   for (const cat of CATS) {
-    const actualRow = db.prepare('SELECT SUM(um_hl) as total FROM ventas WHERE categoria = ? AND mes = ? AND anio = ?').get(cat, mes, anio);
-    const anteriorRow = db.prepare('SELECT SUM(um_hl) as total FROM ventas WHERE categoria = ? AND mes = ? AND anio = ?').get(cat, mes, anio - 1);
+    const actualRow = db.prepare(`SELECT SUM(v.um_hl) as total FROM ventas v ${join} WHERE v.categoria = ? AND v.mes = ? AND v.anio = ?${clause}`).get(cat, mes, anio, ...params);
+    const anteriorRow = db.prepare(`SELECT SUM(v.um_hl) as total FROM ventas v ${join} WHERE v.categoria = ? AND v.mes = ? AND v.anio = ?${clause}`).get(cat, mes, anio - 1, ...params);
     const actual = actualRow.total || 0;
     const anterior = anteriorRow.total || 0;
     const proyectado = (diasReales && diasConfigurados) ? (actual / diasReales * diasConfigurados) : null;
@@ -322,7 +347,7 @@ route('POST', '/api/admin/users/:id/reset-password', async (req, res, params) =>
 });
  
 // ---------- Ranking de marcas y clientes (para la vista online) ----------
-// GET /api/ranking/marcas?mes=&anio=&categoria= - ranking de marcas de una categoria
+// GET /api/ranking/marcas?mes=&anio=&categoria=&supervisor=&camionero=&vendedor=&dia= - ranking de marcas de una categoria
 route('GET', '/api/ranking/marcas', async (req, res) => {
   if (!requireAuth(req, res, ['admin', 'supervisor', 'vendedor'])) return;
   const parsed = url.parse(req.url, true);
@@ -330,15 +355,16 @@ route('GET', '/api/ranking/marcas', async (req, res) => {
   const anio = Number(parsed.query.anio);
   const categoria = parsed.query.categoria || '';
   if (!mes || !anio || !categoria) return sendJson(res, 400, { error: 'Faltan parametros mes, anio y categoria' });
+  const { clause, params, join } = buildFiltros(parsed.query);
   const rows = db.prepare(`
-    SELECT marca, SUM(um_hl) as hl FROM ventas
-    WHERE categoria = ? AND mes = ? AND anio = ?
-    GROUP BY marca HAVING SUM(um_hl) >= 0.001
+    SELECT v.marca as marca, SUM(v.um_hl) as hl FROM ventas v ${join}
+    WHERE v.categoria = ? AND v.mes = ? AND v.anio = ?${clause}
+    GROUP BY v.marca HAVING SUM(v.um_hl) >= 0.001
     ORDER BY hl DESC
-  `).all(categoria, mes, anio);
+  `).all(categoria, mes, anio, ...params);
   sendJson(res, 200, rows.map(r => ({ marca: r.marca, hl: Math.round(r.hl * 1000) / 1000 })));
 });
-// GET /api/ranking/clientes?mes=&anio=&categoria=&marca= - top 15 clientes de esa marca
+// GET /api/ranking/clientes?mes=&anio=&categoria=&marca=&supervisor=&camionero=&vendedor=&dia= - top 15 clientes de esa marca
 route('GET', '/api/ranking/clientes', async (req, res) => {
   if (!requireAuth(req, res, ['admin', 'supervisor', 'vendedor'])) return;
   const parsed = url.parse(req.url, true);
@@ -347,13 +373,15 @@ route('GET', '/api/ranking/clientes', async (req, res) => {
   const categoria = parsed.query.categoria || '';
   const marca = parsed.query.marca || '';
   if (!mes || !anio || !categoria || !marca) return sendJson(res, 400, { error: 'Faltan parametros mes, anio, categoria y marca' });
+  const filtros = buildFiltros(parsed.query);
+  // Esta consulta siempre necesita el JOIN con clientes (para traer razon_social/domicilio), independientemente de los filtros.
   const rows = db.prepare(`
     SELECT v.cliente_id as cliente_id, c.razon_social as razon_social, c.domicilio as domicilio, SUM(v.um_hl) as hl
     FROM ventas v LEFT JOIN clientes c ON c.cliente_id = v.cliente_id
-    WHERE v.categoria = ? AND v.marca = ? AND v.mes = ? AND v.anio = ?
+    WHERE v.categoria = ? AND v.marca = ? AND v.mes = ? AND v.anio = ?${filtros.clause}
     GROUP BY v.cliente_id HAVING SUM(v.um_hl) >= 0.001
     ORDER BY hl DESC LIMIT 15
-  `).all(categoria, marca, mes, anio);
+  `).all(categoria, marca, mes, anio, ...filtros.params);
   sendJson(res, 200, rows.map(r => ({
     cliente_id: r.cliente_id,
     razon_social: r.razon_social || '',
