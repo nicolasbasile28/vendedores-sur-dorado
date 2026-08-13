@@ -165,14 +165,20 @@ route('POST', '/api/upload', async (req, res) => {
   const raw = (await readBody(req)).toString('utf-8');
   let data;
   try { data = JSON.parse(raw); } catch (e) { return sendJson(res, 400, { error: 'JSON invalido' }); }
-  const { clientes, ventas, mes_actual } = data;
+  const { clientes, ventas, mes_actual, mes, anio } = data;
   if (!Array.isArray(clientes) || !Array.isArray(ventas)) {
     return sendJson(res, 400, { error: 'Formato invalido: se esperaba {clientes:[], ventas:[]}' });
   }
   db.exec('BEGIN');
   try {
-    db.exec('DELETE FROM ventas');
-    db.exec('DELETE FROM clientes');
+    // Conserva el historico: si viene mes/anio, solo se borra y reemplaza ESE periodo.
+    // Si no viene (compatibilidad con subidas viejas), se borra todo como antes.
+    if (mes && anio) {
+      db.prepare('DELETE FROM ventas WHERE mes = ? AND anio = ?').run(Number(mes), Number(anio));
+    } else {
+      db.exec('DELETE FROM ventas');
+    }
+    // Los clientes se actualizan por cliente_id (INSERT OR REPLACE), no se borra el universo completo.
     const insCliente = db.prepare(`
       INSERT OR REPLACE INTO clientes (cliente_id, razon_social, domicilio, personal_comercial, dias_visita)
       VALUES (?,?,?,?,?)
