@@ -160,7 +160,7 @@ route('GET', '/api/cliente/:id/marca/:marca', async (req, res, params) => {
   sendJson(res, 200, rows);
 });
 route('POST', '/api/upload', async (req, res) => {
-  const session = requireAuth(req, res, ['admin']);
+  const session = requireAuth(req, res, ['admin', 'supervisor']);
   if (!session) return;
   const raw = (await readBody(req)).toString('utf-8');
   let data;
@@ -208,6 +208,23 @@ route('GET', '/api/meta', async (req, res) => {
   const out = {};
   rows.forEach(r => out[r.key] = r.value);
   sendJson(res, 200, out);
+});
+ 
+// ---------- Configuracion (dias del mes para proyeccion) ----------
+// GET /api/config/dias - cualquiera logueado puede leerlo (para calcular proyecciones)
+route('GET', '/api/config/dias', async (req, res) => {
+  if (!requireAuth(req, res, ['admin', 'supervisor', 'vendedor'])) return;
+  const row = db.prepare('SELECT value FROM meta WHERE key = ?').get('dias_configurados');
+  sendJson(res, 200, { dias_configurados: row ? Number(row.value) : null });
+});
+// POST /api/config/dias - solo admin puede cambiarlo { dias: 22 }
+route('POST', '/api/config/dias', async (req, res) => {
+  if (!requireAuth(req, res, ['admin'])) return;
+  const body = JSON.parse((await readBody(req)).toString('utf-8') || '{}');
+  const dias = Number(body.dias);
+  if (!dias || dias <= 0 || dias > 31) return sendJson(res, 400, { error: 'Dias invalidos' });
+  db.prepare('INSERT OR REPLACE INTO meta (key, value) VALUES (?,?)').run('dias_configurados', String(dias));
+  sendJson(res, 200, { ok: true, dias_configurados: dias });
 });
  
 // ---------- Gestion de usuarios (solo admin) ----------
