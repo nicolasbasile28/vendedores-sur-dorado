@@ -9,7 +9,7 @@ fs.mkdirSync(path.dirname(DB_PATH), { recursive: true });
 const db = new DatabaseSync(DB_PATH);
 
 db.exec(`
-  CREATE TABLE IF NOT EXISTS ventas (
+CREATE TABLE IF NOT EXISTS ventas (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     cliente_id TEXT NOT NULL,
     categoria TEXT NOT NULL,
@@ -24,12 +24,6 @@ db.exec(`
   );
   CREATE INDEX IF NOT EXISTS idx_ventas_periodo ON ventas(anio, mes);
   CREATE INDEX IF NOT EXISTS idx_ventas_supervisor ON ventas(supervisor);
-  CREATE TABLE IF NOT EXISTS sessions (
-    token TEXT PRIMARY KEY,
-    user_id INTEGER NOT NULL,
-    created_at TEXT NOT NULL,
-    FOREIGN KEY(user_id) REFERENCES users(id)
-  );
 
   CREATE TABLE IF NOT EXISTS clientes (
     cliente_id TEXT PRIMARY KEY,
