@@ -214,14 +214,11 @@ route('POST', '/api/upload', async (req, res) => {
     for (const c of clientes) {
       insCliente.run(String(c.cliente_id), c.razon_social || '', c.domicilio || '', c.personal_comercial || '', c.dias_visita || '');
     }
-    const insVenta = const insVenta = db.prepare(`
+    const insVenta = const insVenta = const insVenta = db.prepare(`
       INSERT INTO ventas (cliente_id, categoria, marca, articulo, um_hl, supervisor, camionero, tipo_documento, mes, anio) VALUES (?,?,?,?,?,?,?,?,?,?)
     `);
     for (const v of ventas) {
       insVenta.run(String(v.cliente_id), v.categoria, v.marca, v.articulo, Number(v.um_hl) || 0, v.supervisor || null, v.camionero || null, v.tipo_documento || null, v.mes || null, v.anio || null);
-    }
-    for (const v of ventas) {
-      insVenta.run(String(v.cliente_id), v.categoria, v.marca, v.articulo, Number(v.um_hl) || 0);
     }
     const setMeta = db.prepare('INSERT OR REPLACE INTO meta (key, value) VALUES (?,?)');
     setMeta.run('mes_actual', mes_actual || '');
