@@ -194,4 +194,74 @@ route('POST', '/api/upload', async (req, res) => {
     db.exec('ROLLBACK');
     return sendJson(res, 500, { error: 'Error guardando datos: ' + e.message });
   }
-  sendJson(res, 200, { ok: true,
+  sendJson(res, 200, { ok: true, clientes: clientes.length, ventas: ventas.length });
+});
+route('GET', '/api/meta', async (req, res) => {
+  if (!requireAuth(req, res, ['admin', 'supervisor', 'vendedor'])) return;
+  const rows = db.prepare('SELECT key, value FROM meta').all();
+  const out = {};
+  rows.forEach(r => out[r.key] = r.value);
+  sendJson(res, 200, out);
+});
+const MIME = {
+  '.html': 'text/html; charset=utf-8',
+  '.js': 'application/javascript; charset=utf-8',
+  '.css': 'text/css; charset=utf-8',
+  '.json': 'application/json; charset=utf-8',
+  '.png': 'image/png',
+  '.svg': 'image/svg+xml',
+  '.webmanifest': 'application/manifest+json',
+};
+function serveStatic(req, res, pathname) {
+  let filePath = path.join(PUBLIC_DIR, pathname === '/' ? 'index.html' : pathname);
+  if (!filePath.startsWith(PUBLIC_DIR)) { res.writeHead(403); res.end(); return; }
+  fs.readFile(filePath, (err, data) => {
+    if (err) {
+      fs.readFile(path.join(PUBLIC_DIR, 'index.html'), (err2, data2) => {
+        if (err2) { res.writeHead(404); res.end('Not found'); return; }
+        res.writeHead(200, { 'Content-Type': MIME['.html'] });
+        res.end(data2);
+      });
+      return;
+    }
+    const ext = path.extname(filePath);
+    res.writeHead(200, { 'Content-Type': MIME[ext] || 'application/octet-stream' });
+    res.end(data);
+  });
+}
+const server = http.createServer(async (req, res) => {
+  const parsed = url.parse(req.url, true);
+  const pathname = parsed.pathname;
+  if (req.method === 'OPTIONS') {
+    res.writeHead(204, {
+      'Access-Control-Allow-Origin': '*',
+      'Access-Control-Allow-Methods': 'GET,POST,OPTIONS',
+      'Access-Control-Allow-Headers': 'Content-Type, Authorization',
+    });
+    return res.end();
+  }
+  if (pathname.startsWith('/api/')) {
+    const match = matchRoute(req.method, pathname);
+    if (!match) return sendJson(res, 404, { error: 'Ruta no encontrada' });
+    try {
+      await match.handler(req, res, match.params);
+    } catch (e) {
+      console.error(e);
+      sendJson(res, 500, { error: 'Error interno: ' + e.message });
+    }
+    return;
+  }
+  serveStatic(req, res, pathname);
+});
+(function autoSeed(){
+  const count = db.prepare('SELECT COUNT(*) as n FROM users').get().n;
+  if (count === 0) {
+    authLib.createUser('surdorado', 'luca1901', 'admin');
+    authLib.createUser('vendedores', 'vende2026', 'vendedor');
+    console.log('Auto-seed: usuarios iniciales creados (surdorado / vendedores).');
+  }
+})();
+server.listen(PORT, () => {
+  console.log(`Servidor escuchando en puerto ${PORT}`);
+});
+module.exports = server;
