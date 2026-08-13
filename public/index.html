@@ -88,4 +88,98 @@
   .sin-compra{color:var(--text3); font-size:13.5px; padding:6px 0;}
 
   /* ---- Marca (articulos) screen ---- */
-  .art-row{display:flex; justify-content:space-between; align-items:center; background:var(--panel); border-radius:10px; padding:12px 14px;
+  .art-row{display:flex; justify-content:space-between; align-items:center; background:var(--panel); border-radius:10px; padding:12px 14px; margin-bottom:8px;}
+  .art-row .aname{font-size:14px;}
+  .art-row .ahl{font-weight:700; font-size:14px;}
+
+  .loading{text-align:center; padding:30px; color:var(--text3);}
+</style>
+</head>
+<body>
+
+<!-- ============ LOGIN ============ -->
+<div id="screenLogin" class="screen active">
+  <div class="login-box">
+    <div class="brand">SUR<span>DORADO</span></div>
+    <h2>Acceso vendedores</h2>
+    <div class="login-error" id="loginError"></div>
+    <input type="text" id="loginUser" placeholder="Usuario" autocomplete="username">
+    <input type="password" id="loginPass" placeholder="Contraseña" autocomplete="current-password">
+    <button id="btnLogin">Ingresar</button>
+  </div>
+</div>
+
+<!-- ============ SELECTOR (Pantalla 1) ============ -->
+<div id="screenSelector" class="screen">
+  <div class="topbar">
+    <div class="topbar-inner">
+    <div class="title" id="selectorTitle">Sur Dorado</div>
+    <button class="logout-btn" id="btnLogout">Salir</button>
+    </div>
+  </div>
+  <div class="content">
+    <div class="greeting" id="greetingText">Buen día, vamos a trabajar</div>
+
+    <div class="field">
+      <label>Vendedor</label>
+      <div class="cselect" id="cselVendedor">
+        <button type="button" class="cselect-btn" id="cselVendedorBtn">Elegí un vendedor...</button>
+        <div class="cselect-panel" id="cselVendedorPanel"></div>
+      </div>
+    </div>
+    <div class="field">
+      <label>Día de visita</label>
+      <div class="cselect" id="cselDia">
+        <button type="button" class="cselect-btn" id="cselDiaBtn" disabled>Elegí un vendedor primero</button>
+        <div class="cselect-panel" id="cselDiaPanel"></div>
+      </div>
+    </div>
+
+    <div id="resultsArea" style="display:none;">
+      <div class="summary-total">
+        <div class="label">Clientes de hoy</div>
+        <div class="value" id="totalClientes">0</div>
+      </div>
+
+      <div class="cat-grid">
+        <div class="cat-card" style="--c:var(--cerveza);"><div class="lbl">🍺 Cervezas</div><div class="num" id="numCervezas">0</div></div>
+        <div class="cat-card" style="--c:var(--agua);"><div class="lbl">💧 Aguas</div><div class="num" id="numAguas">0</div></div>
+        <div class="cat-card" style="--c:var(--vinos);"><div class="lbl">🍷 Vinos</div><div class="num" id="numVinos">0</div></div>
+        <div class="cat-card" style="--c:var(--sidras);"><div class="lbl">🍏 Sidras</div><div class="num" id="numSidras">0</div></div>
+      </div>
+
+      <input type="text" class="search-box" id="searchBox" placeholder="Buscar por código o nombre...">
+      <div id="clientList"></div>
+    </div>
+  </div>
+</div>
+
+<!-- ============ CLIENTE (Pantalla 2) ============ -->
+<div id="screenCliente" class="screen">
+  <div class="topbar">
+    <div class="topbar-inner">
+    <button class="back-btn" id="btnBackFromCliente">‹</button>
+    <div class="title">Detalle del cliente</div>
+    </div>
+  </div>
+  <div class="content" id="clienteContent">
+    <div class="loading">Cargando...</div>
+  </div>
+</div>
+
+<!-- ============ MARCA / ARTICULOS (Pantalla 3) ============ -->
+<div id="screenMarca" class="screen">
+  <div class="topbar">
+    <div class="topbar-inner">
+    <button class="back-btn" id="btnBackFromMarca">‹</button>
+    <div class="title" id="marcaTitle">Artículos</div>
+    </div>
+  </div>
+  <div class="content" id="marcaContent">
+    <div class="loading">Cargando...</div>
+  </div>
+</div>
+
+<script src="app.js"></script>
+</body>
+</html>
