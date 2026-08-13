@@ -5,10 +5,8 @@ const path = require('path');
 const url = require('url');
 const db = require('./db');
 const authLib = require('./auth');
-
 const PORT = process.env.PORT || 3000;
 const PUBLIC_DIR = path.join(__dirname, '..', 'public');
-
 // ---------- Utilidades ----------
 function sendJson(res, status, obj) {
   const body = JSON.stringify(obj);
@@ -18,7 +16,6 @@ function sendJson(res, status, obj) {
   });
   res.end(body);
 }
-
 function readBody(req) {
   return new Promise((resolve, reject) => {
     let chunks = [];
@@ -36,13 +33,11 @@ function readBody(req) {
     req.on('error', reject);
   });
 }
-
 function getAuth(req) {
   const h = req.headers['authorization'] || '';
   const token = h.startsWith('Bearer ') ? h.slice(7) : null;
   return authLib.getSession(token);
 }
-
 function requireAuth(req, res, roles) {
   const session = getAuth(req);
   if (!session) {
@@ -55,18 +50,10 @@ function requireAuth(req, res, roles) {
   }
   return session;
 }
-
-// Normaliza texto de dia: separa combinados tipo "LUJU" no hace falta,
-// el campo dias_visita ya viene tal cual del Universo (ej: 'LUNES', 'LUJU', 'MAVI', 'MISA').
-// Un vendedor puede tener clientes con distintos codigos de dia; el desplegable de dias
-// se arma con los codigos distintos que existan para ESE vendedor.
-
-// ---------- Rutas API ----------
 const routes = [];
 function route(method, pattern, handler) {
   routes.push({ method, pattern, handler });
 }
-
 function matchRoute(method, pathname) {
   for (const r of routes) {
     if (r.method !== method) continue;
@@ -86,24 +73,18 @@ function matchRoute(method, pathname) {
   }
   return null;
 }
-
-// POST /api/login
 route('POST', '/api/login', async (req, res) => {
   const body = JSON.parse((await readBody(req)).toString('utf-8') || '{}');
   const result = authLib.login(body.username || '', body.password || '');
   if (!result) return sendJson(res, 401, { error: 'Usuario o contraseña incorrectos' });
   sendJson(res, 200, result);
 });
-
-// POST /api/logout
 route('POST', '/api/logout', async (req, res) => {
   const h = req.headers['authorization'] || '';
   const token = h.startsWith('Bearer ') ? h.slice(7) : null;
   if (token) authLib.logout(token);
   sendJson(res, 200, { ok: true });
 });
-
-// GET /api/vendedores - lista de nombres distintos (personal_comercial)
 route('GET', '/api/vendedores', async (req, res) => {
   if (!requireAuth(req, res, ['admin', 'supervisor', 'vendedor'])) return;
   const rows = db.prepare(`
@@ -113,8 +94,6 @@ route('GET', '/api/vendedores', async (req, res) => {
   `).all();
   sendJson(res, 200, rows.map(r => r.personal_comercial));
 });
-
-// GET /api/dias?vendedor=X - dias distintos para ese vendedor
 route('GET', '/api/dias', async (req, res) => {
   if (!requireAuth(req, res, ['admin', 'supervisor', 'vendedor'])) return;
   const parsed = url.parse(req.url, true);
@@ -126,8 +105,6 @@ route('GET', '/api/dias', async (req, res) => {
   `).all(vendedor);
   sendJson(res, 200, rows.map(r => r.dias_visita));
 });
-
-// GET /api/clientes?vendedor=X&dia=Y - lista de clientes + resumen de compras por categoria
 route('GET', '/api/clientes', async (req, res) => {
   if (!requireAuth(req, res, ['admin', 'supervisor', 'vendedor'])) return;
   const parsed = url.parse(req.url, true);
@@ -138,7 +115,6 @@ route('GET', '/api/clientes', async (req, res) => {
     WHERE personal_comercial = ? AND dias_visita = ?
     ORDER BY razon_social
   `).all(vendedor, dia);
-
   const CATS = ['Cervezas', 'Aguas', 'Vinos', 'Sidras'];
   const compradoresPorCat = {};
   for (const cat of CATS) {
@@ -150,20 +126,16 @@ route('GET', '/api/clientes', async (req, res) => {
     `).all(vendedor, dia, cat);
     compradoresPorCat[cat] = rows.length;
   }
-
   sendJson(res, 200, {
     total_clientes: clientes.length,
     compradores_por_categoria: compradoresPorCat,
     clientes,
   });
 });
-
-// GET /api/cliente/:id - detalle: categorias + marcas con HL
 route('GET', '/api/cliente/:id', async (req, res, params) => {
   if (!requireAuth(req, res, ['admin', 'supervisor', 'vendedor'])) return;
   const cliente = db.prepare('SELECT * FROM clientes WHERE cliente_id = ?').get(params.id);
   if (!cliente) return sendJson(res, 404, { error: 'Cliente no encontrado' });
-
   const CATS = ['Cervezas', 'Aguas', 'Vinos', 'Sidras'];
   const resultado = {};
   for (const cat of CATS) {
@@ -177,8 +149,6 @@ route('GET', '/api/cliente/:id', async (req, res, params) => {
   }
   sendJson(res, 200, { cliente, compras: resultado });
 });
-
-// GET /api/cliente/:id/marca/:marca - articulos comprados de esa marca
 route('GET', '/api/cliente/:id/marca/:marca', async (req, res, params) => {
   if (!requireAuth(req, res, ['admin', 'supervisor', 'vendedor'])) return;
   const rows = db.prepare(`
@@ -189,20 +159,16 @@ route('GET', '/api/cliente/:id/marca/:marca', async (req, res, params) => {
   `).all(params.id, params.marca);
   sendJson(res, 200, rows);
 });
-
-// POST /api/upload - admin sube datos ya procesados (JSON) desde el navegador
 route('POST', '/api/upload', async (req, res) => {
   const session = requireAuth(req, res, ['admin']);
   if (!session) return;
   const raw = (await readBody(req)).toString('utf-8');
   let data;
   try { data = JSON.parse(raw); } catch (e) { return sendJson(res, 400, { error: 'JSON invalido' }); }
-
   const { clientes, ventas, mes_actual } = data;
   if (!Array.isArray(clientes) || !Array.isArray(ventas)) {
     return sendJson(res, 400, { error: 'Formato invalido: se esperaba {clientes:[], ventas:[]}' });
   }
-
   db.exec('BEGIN');
   try {
     db.exec('DELETE FROM ventas');
@@ -214,7 +180,7 @@ route('POST', '/api/upload', async (req, res) => {
     for (const c of clientes) {
       insCliente.run(String(c.cliente_id), c.razon_social || '', c.domicilio || '', c.personal_comercial || '', c.dias_visita || '');
     }
-    const insVenta = const insVenta = const insVenta = db.prepare(`
+    const insVenta = db.prepare(`
       INSERT INTO ventas (cliente_id, categoria, marca, articulo, um_hl, supervisor, camionero, tipo_documento, mes, anio) VALUES (?,?,?,?,?,?,?,?,?,?)
     `);
     for (const v of ventas) {
@@ -228,92 +194,4 @@ route('POST', '/api/upload', async (req, res) => {
     db.exec('ROLLBACK');
     return sendJson(res, 500, { error: 'Error guardando datos: ' + e.message });
   }
-
-  sendJson(res, 200, { ok: true, clientes: clientes.length, ventas: ventas.length });
-});
-
-// GET /api/meta
-route('GET', '/api/meta', async (req, res) => {
-  if (!requireAuth(req, res, ['admin', 'supervisor', 'vendedor'])) return;
-  const rows = db.prepare('SELECT key, value FROM meta').all();
-  const out = {};
-  rows.forEach(r => out[r.key] = r.value);
-  sendJson(res, 200, out);
-});
-
-// ---------- Archivos estaticos ----------
-const MIME = {
-  '.html': 'text/html; charset=utf-8',
-  '.js': 'application/javascript; charset=utf-8',
-  '.css': 'text/css; charset=utf-8',
-  '.json': 'application/json; charset=utf-8',
-  '.png': 'image/png',
-  '.svg': 'image/svg+xml',
-  '.webmanifest': 'application/manifest+json',
-};
-
-function serveStatic(req, res, pathname) {
-  let filePath = path.join(PUBLIC_DIR, pathname === '/' ? 'index.html' : pathname);
-  if (!filePath.startsWith(PUBLIC_DIR)) { res.writeHead(403); res.end(); return; }
-  fs.readFile(filePath, (err, data) => {
-    if (err) {
-      // SPA fallback -> index.html
-      fs.readFile(path.join(PUBLIC_DIR, 'index.html'), (err2, data2) => {
-        if (err2) { res.writeHead(404); res.end('Not found'); return; }
-        res.writeHead(200, { 'Content-Type': MIME['.html'] });
-        res.end(data2);
-      });
-      return;
-    }
-    const ext = path.extname(filePath);
-    res.writeHead(200, { 'Content-Type': MIME[ext] || 'application/octet-stream' });
-    res.end(data);
-  });
-}
-
-// ---------- Servidor ----------
-const server = http.createServer(async (req, res) => {
-  const parsed = url.parse(req.url, true);
-  const pathname = parsed.pathname;
-
-  if (req.method === 'OPTIONS') {
-    res.writeHead(204, {
-      'Access-Control-Allow-Origin': '*',
-      'Access-Control-Allow-Methods': 'GET,POST,OPTIONS',
-      'Access-Control-Allow-Headers': 'Content-Type, Authorization',
-    });
-    return res.end();
-  }
-
-  if (pathname.startsWith('/api/')) {
-    const match = matchRoute(req.method, pathname);
-    if (!match) return sendJson(res, 404, { error: 'Ruta no encontrada' });
-    try {
-      await match.handler(req, res, match.params);
-    } catch (e) {
-      console.error(e);
-      sendJson(res, 500, { error: 'Error interno: ' + e.message });
-    }
-    return;
-  }
-
-  serveStatic(req, res, pathname);
-});
-
-// Auto-seed: si no hay ningun usuario todavia, crea el admin y el vendedor por defecto.
-// Esto reemplaza la necesidad de correr "npm run seed" a mano (util en el plan gratuito
-// de Render, que no tiene consola/Shell disponible).
-(function autoSeed(){
-  const count = db.prepare('SELECT COUNT(*) as n FROM users').get().n;
-  if (count === 0) {
-    authLib.createUser('surdorado', 'luca1901', 'admin');
-    authLib.createUser('vendedores', 'vende2026', 'vendedor');
-    console.log('Auto-seed: usuarios iniciales creados (surdorado / vendedores).');
-  }
-})();
-
-server.listen(PORT, () => {
-  console.log(`Servidor escuchando en puerto ${PORT}`);
-});
-
-module.exports = server;
+  sendJson(res, 200, { ok: true,
