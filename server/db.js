@@ -32,19 +32,34 @@ db.exec(`
     categoria TEXT NOT NULL,
     marca TEXT NOT NULL,
     articulo TEXT NOT NULL,
-    um_hl REAL NOT NULL,
-    supervisor TEXT,
-    camionero TEXT,
-    tipo_documento TEXT,
-    mes INTEGER,
-    anio INTEGER
+    um_hl REAL NOT NULL
   );
   CREATE INDEX IF NOT EXISTS idx_ventas_cliente ON ventas(cliente_id);
-  CREATE INDEX IF NOT EXISTS idx_ventas_periodo ON ventas(anio, mes);
-  CREATE INDEX IF NOT EXISTS idx_ventas_supervisor ON ventas(supervisor);
   CREATE TABLE IF NOT EXISTS meta (
     key TEXT PRIMARY KEY,
     value TEXT
   );
 `);
+
+// Migracion: agrega columnas nuevas a la tabla ventas si todavia no existen
+// (CREATE TABLE IF NOT EXISTS no modifica una tabla que ya existe con el esquema viejo)
+const columnasNuevas = [
+  { nombre: 'supervisor', tipo: 'TEXT' },
+  { nombre: 'camionero', tipo: 'TEXT' },
+  { nombre: 'tipo_documento', tipo: 'TEXT' },
+  { nombre: 'mes', tipo: 'INTEGER' },
+  { nombre: 'anio', tipo: 'INTEGER' },
+];
+for (const col of columnasNuevas) {
+  try {
+    db.exec(`ALTER TABLE ventas ADD COLUMN ${col.nombre} ${col.tipo}`);
+  } catch (e) {
+    // La columna ya existe, no hace falta hacer nada
+  }
+}
+db.exec(`
+  CREATE INDEX IF NOT EXISTS idx_ventas_periodo ON ventas(anio, mes);
+  CREATE INDEX IF NOT EXISTS idx_ventas_supervisor ON ventas(supervisor);
+`);
+
 module.exports = db;
