@@ -22,7 +22,7 @@ function readBody(req) {
     let size = 0;
     req.on('data', (c) => {
       size += c.length;
-      if (size > 60 * 1024 * 1024) { // 60MB limite
+      if (size > 60 * 1024 * 1024) {
         reject(new Error('Body demasiado grande'));
         req.destroy();
         return;
@@ -203,6 +203,56 @@ route('GET', '/api/meta', async (req, res) => {
   rows.forEach(r => out[r.key] = r.value);
   sendJson(res, 200, out);
 });
+ 
+// ---------- Gestion de usuarios (solo admin) ----------
+// GET /api/admin/users - listar usuarios (sin password)
+route('GET', '/api/admin/users', async (req, res) => {
+  if (!requireAuth(req, res, ['admin'])) return;
+  const rows = db.prepare('SELECT id, username, role FROM users ORDER BY role, username').all();
+  sendJson(res, 200, rows);
+});
+// POST /api/admin/users - crear usuario nuevo { username, password, role }
+route('POST', '/api/admin/users', async (req, res) => {
+  if (!requireAuth(req, res, ['admin'])) return;
+  const body = JSON.parse((await readBody(req)).toString('utf-8') || '{}');
+  const { username, password, role } = body;
+  if (!username || !password || !role) {
+    return sendJson(res, 400, { error: 'Faltan datos: username, password y role son obligatorios' });
+  }
+  if (!['admin', 'supervisor', 'vendedor'].includes(role)) {
+    return sendJson(res, 400, { error: 'Rol invalido' });
+  }
+  if (authLib.findUserByUsername(username)) {
+    return sendJson(res, 400, { error: 'Ese nombre de usuario ya existe' });
+  }
+  try {
+    authLib.createUser(username, password, role);
+  } catch (e) {
+    return sendJson(res, 500, { error: 'Error creando usuario: ' + e.message });
+  }
+  sendJson(res, 200, { ok: true });
+});
+// DELETE /api/admin/users/:id - borrar usuario
+route('DELETE', '/api/admin/users/:id', async (req, res, params) => {
+  const session = requireAuth(req, res, ['admin']);
+  if (!session) return;
+  if (String(session.user_id) === String(params.id)) {
+    return sendJson(res, 400, { error: 'No podes borrar tu propio usuario' });
+  }
+  db.prepare('DELETE FROM sessions WHERE user_id = ?').run(params.id);
+  db.prepare('DELETE FROM users WHERE id = ?').run(params.id);
+  sendJson(res, 200, { ok: true });
+});
+// POST /api/admin/users/:id/reset-password - resetear contraseña { password }
+route('POST', '/api/admin/users/:id/reset-password', async (req, res, params) => {
+  if (!requireAuth(req, res, ['admin'])) return;
+  const body = JSON.parse((await readBody(req)).toString('utf-8') || '{}');
+  if (!body.password) return sendJson(res, 400, { error: 'Falta la nueva contraseña' });
+  const { hash, salt } = authLib.hashPassword(body.password);
+  db.prepare('UPDATE users SET password_hash = ?, salt = ? WHERE id = ?').run(hash, salt, params.id);
+  sendJson(res, 200, { ok: true });
+});
+ 
 const MIME = {
   '.html': 'text/html; charset=utf-8',
   '.js': 'application/javascript; charset=utf-8',
@@ -235,7 +285,7 @@ const server = http.createServer(async (req, res) => {
   if (req.method === 'OPTIONS') {
     res.writeHead(204, {
       'Access-Control-Allow-Origin': '*',
-      'Access-Control-Allow-Methods': 'GET,POST,OPTIONS',
+      'Access-Control-Allow-Methods': 'GET,POST,DELETE,OPTIONS',
       'Access-Control-Allow-Headers': 'Content-Type, Authorization',
     });
     return res.end();
