@@ -1,3 +1,4 @@
+
 // server.js - Servidor HTTP principal (sin dependencias externas, solo Node)
 const http = require('http');
 const fs = require('fs');
@@ -165,7 +166,7 @@ route('POST', '/api/upload', async (req, res) => {
   const raw = (await readBody(req)).toString('utf-8');
   let data;
   try { data = JSON.parse(raw); } catch (e) { return sendJson(res, 400, { error: 'JSON invalido' }); }
-  const { clientes, ventas, mes_actual, mes, anio } = data;
+  const { clientes, ventas, mes_actual, mes, anio, dias_venta_reales } = data;
   if (!Array.isArray(clientes) || !Array.isArray(ventas)) {
     return sendJson(res, 400, { error: 'Formato invalido: se esperaba {clientes:[], ventas:[]}' });
   }
@@ -195,12 +196,53 @@ route('POST', '/api/upload', async (req, res) => {
     const setMeta = db.prepare('INSERT OR REPLACE INTO meta (key, value) VALUES (?,?)');
     setMeta.run('mes_actual', mes_actual || '');
     setMeta.run('last_upload', new Date().toISOString());
+    if (mes && anio && dias_venta_reales) {
+      setMeta.run(`dias_reales_${anio}_${String(mes).padStart(2, '0')}`, String(dias_venta_reales));
+    }
     db.exec('COMMIT');
   } catch (e) {
     db.exec('ROLLBACK');
     return sendJson(res, 500, { error: 'Error guardando datos: ' + e.message });
   }
   sendJson(res, 200, { ok: true, clientes: clientes.length, ventas: ventas.length });
+});
+ 
+// ---------- KPIs por division (para la vista online) ----------
+// GET /api/kpis?mes=8&anio=2026 - totales por categoria, comparacion interanual y proyeccion
+route('GET', '/api/kpis', async (req, res) => {
+  if (!requireAuth(req, res, ['admin', 'supervisor', 'vendedor'])) return;
+  const parsed = url.parse(req.url, true);
+  const mes = Number(parsed.query.mes);
+  const anio = Number(parsed.query.anio);
+  if (!mes || !anio) return sendJson(res, 400, { error: 'Faltan parametros mes y anio' });
+ 
+  const diasConfigRow = db.prepare('SELECT value FROM meta WHERE key = ?').get('dias_configurados');
+  const diasConfigurados = diasConfigRow ? Number(diasConfigRow.value) : null;
+  const diasRealesRow = db.prepare('SELECT value FROM meta WHERE key = ?').get(`dias_reales_${anio}_${String(mes).padStart(2, '0')}`);
+  const diasReales = diasRealesRow ? Number(diasRealesRow.value) : null;
+ 
+  const CATS = ['Cervezas', 'Aguas', 'Vinos', 'Sidras'];
+  const resultado = {};
+  for (const cat of CATS) {
+    const actualRow = db.prepare('SELECT SUM(um_hl) as total FROM ventas WHERE categoria = ? AND mes = ? AND anio = ?').get(cat, mes, anio);
+    const anteriorRow = db.prepare('SELECT SUM(um_hl) as total FROM ventas WHERE categoria = ? AND mes = ? AND anio = ?').get(cat, mes, anio - 1);
+    const actual = actualRow.total || 0;
+    const anterior = anteriorRow.total || 0;
+    const proyectado = (diasReales && diasConfigurados) ? (actual / diasReales * diasConfigurados) : null;
+    const variacionPct = anterior > 0 ? ((actual - anterior) / anterior * 100) : null;
+    resultado[cat] = {
+      actual: Math.round(actual * 1000) / 1000,
+      anio_anterior: Math.round(anterior * 1000) / 1000,
+      proyectado: proyectado !== null ? Math.round(proyectado * 1000) / 1000 : null,
+      variacion_pct: variacionPct !== null ? Math.round(variacionPct * 10) / 10 : null,
+    };
+  }
+  sendJson(res, 200, {
+    mes, anio,
+    dias_configurados: diasConfigurados,
+    dias_venta_reales: diasReales,
+    categorias: resultado,
+  });
 });
 route('GET', '/api/meta', async (req, res) => {
   if (!requireAuth(req, res, ['admin', 'supervisor', 'vendedor'])) return;
