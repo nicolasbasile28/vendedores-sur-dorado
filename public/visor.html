@@ -447,6 +447,7 @@ function exportarClientesExcel(){
   const wb = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(wb, ws, 'Clientes');
   XLSX.writeFile(wb, 'ranking_clientes.xlsx');
+  }
   async function loadFiltrosOpciones(){
   try{
     const res = await fetch(API + '/api/filtros/opciones', {headers: authHeaders()});
