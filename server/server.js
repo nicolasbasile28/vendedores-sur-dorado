@@ -199,6 +199,14 @@ route('POST', '/api/upload', async (req, res) => {
     if (mes && anio && dias_venta_reales) {
       setMeta.run(`dias_reales_${anio}_${String(mes).padStart(2, '0')}`, String(dias_venta_reales));
     }
+    // Retencion: conserva solo los ultimos 13 meses de historico, borra lo mas viejo
+    if (mes && anio) {
+      const periodoActual = anio * 12 + mes;
+      const periodoLimite = periodoActual - 13;
+      const limiteAnio = Math.floor(periodoLimite / 12);
+      const limiteMes = periodoLimite % 12;
+      db.prepare('DELETE FROM ventas WHERE (anio * 12 + mes) <= ?').run(limiteAnio * 12 + limiteMes);
+    }
     db.exec('COMMIT');
   } catch (e) {
     db.exec('ROLLBACK');
