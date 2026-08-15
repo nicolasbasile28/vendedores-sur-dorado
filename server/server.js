@@ -1,3 +1,4 @@
+
 // server.js - Servidor HTTP principal (sin dependencias externas, solo Node)
 const http = require('http');
 const fs = require('fs');
@@ -406,6 +407,57 @@ route('POST', '/api/referencia/supervisores', async (req, res) => {
   if (!body.mapping || typeof body.mapping !== 'object') return sendJson(res, 400, { error: 'Falta mapping' });
   db.prepare('INSERT OR REPLACE INTO meta (key, value) VALUES (?,?)').run('sup_ref_json', JSON.stringify(body.mapping));
   sendJson(res, 200, { ok: true, cantidad: Object.keys(body.mapping).length });
+});
+ 
+// GET /api/ranking/clientes-categoria?mes=&anio=&categoria=&limit=&supervisor=&camionero=&vendedor=&dia= - top N clientes de TODA la categoria (todas las marcas sumadas)
+route('GET', '/api/ranking/clientes-categoria', async (req, res) => {
+  if (!requireAuth(req, res, ['admin', 'supervisor', 'vendedor'])) return;
+  const parsed = url.parse(req.url, true);
+  const mes = Number(parsed.query.mes);
+  const anio = Number(parsed.query.anio);
+  const categoria = parsed.query.categoria || '';
+  const limit = Math.min(Number(parsed.query.limit) || 20, 100);
+  if (!mes || !anio || !categoria) return sendJson(res, 400, { error: 'Faltan parametros mes, anio y categoria' });
+  const filtros = buildFiltros(parsed.query);
+  const rows = db.prepare(`
+    SELECT v.cliente_id as cliente_id, c.razon_social as razon_social, c.domicilio as domicilio, SUM(v.um_hl) as hl
+    FROM ventas v LEFT JOIN clientes c ON c.cliente_id = v.cliente_id
+    WHERE v.categoria = ? AND v.mes = ? AND v.anio = ?${filtros.clause}
+    GROUP BY v.cliente_id HAVING SUM(v.um_hl) >= 0.001
+    ORDER BY hl DESC LIMIT ?
+  `).all(categoria, mes, anio, ...filtros.params, limit);
+  sendJson(res, 200, rows.map(r => ({
+    cliente_id: r.cliente_id,
+    razon_social: r.razon_social || '',
+    domicilio: r.domicilio || '',
+    hl: Math.round(r.hl * 1000) / 1000,
+  })));
+});
+ 
+// GET /api/compradores?mes=&anio=&supervisor=&camionero=&vendedor=&dia= - cantidad de clientes distintos que compraron, por categoria
+route('GET', '/api/compradores', async (req, res) => {
+  if (!requireAuth(req, res, ['admin', 'supervisor', 'vendedor'])) return;
+  const parsed = url.parse(req.url, true);
+  const mes = Number(parsed.query.mes);
+  const anio = Number(parsed.query.anio);
+  if (!mes || !anio) return sendJson(res, 400, { error: 'Faltan parametros mes y anio' });
+  const { clause, params, join } = buildFiltros(parsed.query);
+  const CATS = ['Cervezas', 'Aguas', 'Vinos', 'Sidras'];
+  const resultado = {};
+  for (const cat of CATS) {
+    const rows = db.prepare(`
+      SELECT v.cliente_id FROM ventas v ${join}
+      WHERE v.categoria = ? AND v.mes = ? AND v.anio = ?${clause}
+      GROUP BY v.cliente_id HAVING SUM(v.um_hl) >= 0.001
+    `).all(cat, mes, anio, ...params);
+    resultado[cat] = rows.length;
+  }
+  // Total de compradores distintos (en cualquier categoria)
+  const totalRows = db.prepare(`
+    SELECT DISTINCT v.cliente_id FROM ventas v ${join}
+    WHERE v.mes = ? AND v.anio = ?${clause}
+  `).all(mes, anio, ...params);
+  sendJson(res, 200, { categorias: resultado, total: totalRows.length });
 });
  
 const MIME = {
