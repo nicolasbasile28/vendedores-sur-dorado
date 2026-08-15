@@ -142,6 +142,11 @@
       <div class="loading">Cargando datos...</div>
     </div>
 
+    <div class="section" id="compradoresSection">
+      <h2>Compradores por categoría</h2>
+      <div id="compradoresArea"><div class="loading">Cargando...</div></div>
+    </div>
+
     <div class="section">
       <h2>Ranking de marcas</h2>
       <div class="config-row" style="margin-bottom:14px;">
@@ -170,6 +175,38 @@
             </tr>
           </thead>
           <tbody id="drillDownBody"></tbody>
+        </table>
+      </div>
+    </div>
+
+    <div class="section">
+      <h2>Top clientes por categoría (todas las marcas)</h2>
+      <div class="config-row" style="margin-bottom:14px;">
+        <label>Categoría:</label>
+        <select id="catTopClientesSelect" onchange="loadTopClientesCategoria()">
+          <option value="Cervezas">Cervezas</option>
+          <option value="Aguas">Aguas</option>
+          <option value="Vinos">Vinos</option>
+          <option value="Sidras">Sidras</option>
+        </select>
+        <label>Cantidad:</label>
+        <select id="limitTopClientesSelect" onchange="loadTopClientesCategoria()">
+          <option value="15">Top 15</option>
+          <option value="20" selected>Top 20</option>
+        </select>
+      </div>
+      <button onclick="exportarTopClientesExcel()" style="background:var(--bordo); color:#fff; border:none; padding:7px 14px; border-radius:6px; cursor:pointer; font-size:13px; margin-bottom:12px;">Exportar a Excel</button>
+      <div style="overflow-x:auto;">
+        <table style="width:100%; border-collapse:collapse; font-size:13px;">
+          <thead>
+            <tr style="text-align:left; color:var(--text2); border-bottom:1px solid var(--border);">
+              <th style="padding:6px;">Código</th>
+              <th style="padding:6px;">Razón social</th>
+              <th style="padding:6px;">Domicilio</th>
+              <th style="padding:6px; text-align:right;">HL</th>
+            </tr>
+          </thead>
+          <tbody id="topClientesBody"><tr><td colspan="4" style="padding:10px;">Elegí "Ver" arriba para cargar.</td></tr></tbody>
         </table>
       </div>
     </div>
@@ -218,7 +255,8 @@
 <script>
 const API = ''; // mismo origen (se sirve desde el mismo sitio)
 let TOKEN = null, ROLE = null, USERNAME = null;
-  function showMsg(elId, text, ok){
+
+function showMsg(elId, text, ok){
   const el = document.getElementById(elId);
   el.textContent = text;
   el.className = 'msg ' + (ok ? 'ok' : 'err');
@@ -260,8 +298,7 @@ function showTab(tab){
   document.getElementById('tabBtnPanel').style.background = tab === 'panel' ? 'rgba(255,255,255,.15)' : 'transparent';
   document.getElementById('tabBtnConfig').style.background = tab === 'config' ? 'rgba(255,255,255,.15)' : 'transparent';
 }
-
-function doLogout(){
+  function doLogout(){
   TOKEN = null; ROLE = null;
   document.getElementById('mainScreen').classList.add('hidden');
   document.getElementById('loginScreen').classList.remove('hidden');
@@ -301,6 +338,8 @@ async function loadKpis(){
     if(!res.ok){ document.getElementById('kpiArea').innerHTML = '<div class="loading">' + (data.error||'Error') + '</div>'; return; }
     renderKpis(data);
     loadRankingMarcas();
+    loadCompradores();
+    loadTopClientesCategoria();
   }catch(e){
     document.getElementById('kpiArea').innerHTML = '<div class="loading">Error: ' + e.message + '</div>';
   }
@@ -408,9 +447,7 @@ function exportarClientesExcel(){
   const wb = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(wb, ws, 'Clientes');
   XLSX.writeFile(wb, 'ranking_clientes.xlsx');
-}
-
-async function loadFiltrosOpciones(){
+  async function loadFiltrosOpciones(){
   try{
     const res = await fetch(API + '/api/filtros/opciones', {headers: authHeaders()});
     const data = await res.json();
@@ -446,7 +483,8 @@ function filtrosQueryString(){
   if(camionero) qs += '&camionero=' + encodeURIComponent(camionero);
   return qs;
 }
-  // ---------- Utilidades de lectura de Excel (mismas que el dashboard grande) ----------
+
+// ---------- Utilidades de lectura de Excel (mismas que el dashboard grande) ----------
 const CAT_MAP = {'CERVEZA':'Cervezas','AGUA':'Aguas','VINOS':'Vinos','SIDRAS':'Sidras'};
 const normName = s => (s||'').toString().toUpperCase().trim().split(/\s+/).sort().join(' ');
 function readWorkbook(file){
@@ -617,6 +655,76 @@ async function procesarVentasHoy(){
   }catch(e){
     showMsg('uploadVentasMsg', 'Error: ' + e.message, false);
   }
+}
+
+// ---------- Compradores por categoria ----------
+async function loadCompradores(){
+  if(!CURRENT_MES || !CURRENT_ANIO) return;
+  const area = document.getElementById('compradoresArea');
+  area.innerHTML = '<div class="loading">Cargando...</div>';
+  try{
+    const res = await fetch(API + `/api/compradores?mes=${CURRENT_MES}&anio=${CURRENT_ANIO}${filtrosQueryString()}`, {headers: authHeaders()});
+    const data = await res.json();
+    if(!res.ok){ area.innerHTML = '<div class="loading">' + (data.error||'Error') + '</div>'; return; }
+    const cats = ['Cervezas','Aguas','Vinos','Sidras'];
+    const max = Math.max(data.total, 1);
+    let html = '';
+    for(const cat of cats){
+      const n = data.categorias[cat] || 0;
+      const pct = max > 0 ? (n / max * 100) : 0;
+      html += `
+        <div style="margin-bottom:10px;">
+          <div style="display:flex; justify-content:space-between; font-size:13px; margin-bottom:3px;">
+            <span>${cat}</span><span style="color:var(--text2);">${n} clientes</span>
+          </div>
+          <div style="background:var(--card2); border-radius:4px; height:10px; overflow:hidden;">
+            <div style="background:var(--dorado); height:100%; width:${pct}%;"></div>
+          </div>
+        </div>
+      `;
+    }
+    html += `<p class="note">Total de clientes compradores (cualquier categoría): <strong>${data.total}</strong></p>`;
+    area.innerHTML = html;
+  }catch(e){
+    area.innerHTML = '<div class="loading">Error: ' + e.message + '</div>';
+  }
+}
+  // ---------- Top clientes por categoria (todas las marcas) ----------
+let TOP_CLIENTES_CATEGORIA = [];
+async function loadTopClientesCategoria(){
+  if(!CURRENT_MES || !CURRENT_ANIO) return;
+  const categoria = document.getElementById('catTopClientesSelect').value;
+  const limit = document.getElementById('limitTopClientesSelect').value;
+  const body = document.getElementById('topClientesBody');
+  body.innerHTML = '<tr><td colspan="4" style="padding:10px;">Cargando...</td></tr>';
+  try{
+    const res = await fetch(API + `/api/ranking/clientes-categoria?mes=${CURRENT_MES}&anio=${CURRENT_ANIO}&categoria=${encodeURIComponent(categoria)}&limit=${limit}${filtrosQueryString()}`, {headers: authHeaders()});
+    const rows = await res.json();
+    if(!res.ok){ body.innerHTML = '<tr><td colspan="4">' + (rows.error||'Error') + '</td></tr>'; return; }
+    TOP_CLIENTES_CATEGORIA = rows;
+    if(!rows.length){ body.innerHTML = '<tr><td colspan="4" style="padding:10px;">Sin datos para esta categoría en este período.</td></tr>'; return; }
+    body.innerHTML = rows.map(r => `
+      <tr style="border-bottom:1px solid var(--border);">
+        <td style="padding:6px;">${r.cliente_id}</td>
+        <td style="padding:6px;">${r.razon_social}</td>
+        <td style="padding:6px;">${r.domicilio}</td>
+        <td style="padding:6px; text-align:right;">${fmtHL(r.hl)}</td>
+      </tr>
+    `).join('');
+  }catch(e){
+    body.innerHTML = '<tr><td colspan="4">Error: ' + e.message + '</td></tr>';
+  }
+}
+
+function exportarTopClientesExcel(){
+  if(!TOP_CLIENTES_CATEGORIA.length){ alert('No hay datos para exportar.'); return; }
+  const data = TOP_CLIENTES_CATEGORIA.map(r => ({
+    'Código': r.cliente_id, 'Razón social': r.razon_social, 'Domicilio': r.domicilio, 'HL': r.hl,
+  }));
+  const ws = XLSX.utils.json_to_sheet(data);
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, 'Top Clientes');
+  XLSX.writeFile(wb, 'top_clientes_categoria.xlsx');
 }
 
 async function loadDiasConfig(){
