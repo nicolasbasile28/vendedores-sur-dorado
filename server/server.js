@@ -1,4 +1,3 @@
-
 // server.js - Servidor HTTP principal (sin dependencias externas, solo Node)
 const http = require('http');
 const fs = require('fs');
@@ -172,14 +171,11 @@ route('POST', '/api/upload', async (req, res) => {
   }
   db.exec('BEGIN');
   try {
-    // Conserva el historico: si viene mes/anio, solo se borra y reemplaza ESE periodo.
-    // Si no viene (compatibilidad con subidas viejas), se borra todo como antes.
     if (mes && anio) {
       db.prepare('DELETE FROM ventas WHERE mes = ? AND anio = ?').run(Number(mes), Number(anio));
     } else {
       db.exec('DELETE FROM ventas');
     }
-    // Los clientes se actualizan por cliente_id (INSERT OR REPLACE), no se borra el universo completo.
     const insCliente = db.prepare(`
       INSERT OR REPLACE INTO clientes (cliente_id, razon_social, domicilio, personal_comercial, dias_visita)
       VALUES (?,?,?,?,?)
@@ -210,7 +206,13 @@ route('POST', '/api/upload', async (req, res) => {
   }
   sendJson(res, 200, { ok: true, clientes: clientes.length, ventas: ventas.length });
 });
- 
+route('GET', '/api/meta', async (req, res) => {
+  if (!requireAuth(req, res, ['admin', 'supervisor', 'vendedor'])) return;
+  const rows = db.prepare('SELECT key, value FROM meta').all();
+  const out = {};
+  rows.forEach(r => out[r.key] = r.value);
+  sendJson(res, 200, out);
+});
 // Arma la clausula WHERE y el JOIN necesarios segun los filtros opcionales que vengan en el query string
 function buildFiltros(query) {
   const filtros = { supervisor: query.supervisor || '', camionero: query.camionero || '', vendedor: query.vendedor || '', dia: query.dia || '' };
@@ -224,7 +226,7 @@ function buildFiltros(query) {
   const join = needsJoin ? 'LEFT JOIN clientes c ON c.cliente_id = v.cliente_id' : '';
   return { clause, params, join };
 }
- 
+
 // ---------- Opciones de filtros (para los desplegables) ----------
 route('GET', '/api/filtros/opciones', async (req, res) => {
   if (!requireAuth(req, res, ['admin', 'supervisor', 'vendedor'])) return;
@@ -234,9 +236,8 @@ route('GET', '/api/filtros/opciones', async (req, res) => {
   const dias = db.prepare(`SELECT DISTINCT dias_visita FROM clientes WHERE dias_visita IS NOT NULL AND dias_visita != '' ORDER BY dias_visita`).all().map(r => r.dias_visita);
   sendJson(res, 200, { supervisores, camioneros, vendedores, dias });
 });
- 
+
 // ---------- KPIs por division (para la vista online) ----------
-// GET /api/kpis?mes=8&anio=2026&supervisor=&camionero=&vendedor=&dia= - totales por categoria, comparacion interanual y proyeccion
 route('GET', '/api/kpis', async (req, res) => {
   if (!requireAuth(req, res, ['admin', 'supervisor', 'vendedor'])) return;
   const parsed = url.parse(req.url, true);
@@ -244,12 +245,12 @@ route('GET', '/api/kpis', async (req, res) => {
   const anio = Number(parsed.query.anio);
   if (!mes || !anio) return sendJson(res, 400, { error: 'Faltan parametros mes y anio' });
   const { clause, params, join } = buildFiltros(parsed.query);
- 
+
   const diasConfigRow = db.prepare('SELECT value FROM meta WHERE key = ?').get('dias_configurados');
   const diasConfigurados = diasConfigRow ? Number(diasConfigRow.value) : null;
   const diasRealesRow = db.prepare('SELECT value FROM meta WHERE key = ?').get(`dias_reales_${anio}_${String(mes).padStart(2, '0')}`);
   const diasReales = diasRealesRow ? Number(diasRealesRow.value) : null;
- 
+
   const CATS = ['Cervezas', 'Aguas', 'Vinos', 'Sidras'];
   const resultado = {};
   for (const cat of CATS) {
@@ -280,15 +281,13 @@ route('GET', '/api/meta', async (req, res) => {
   rows.forEach(r => out[r.key] = r.value);
   sendJson(res, 200, out);
 });
- 
+
 // ---------- Configuracion (dias del mes para proyeccion) ----------
-// GET /api/config/dias - cualquiera logueado puede leerlo (para calcular proyecciones)
 route('GET', '/api/config/dias', async (req, res) => {
   if (!requireAuth(req, res, ['admin', 'supervisor', 'vendedor'])) return;
   const row = db.prepare('SELECT value FROM meta WHERE key = ?').get('dias_configurados');
   sendJson(res, 200, { dias_configurados: row ? Number(row.value) : null });
 });
-// POST /api/config/dias - solo admin puede cambiarlo { dias: 22 }
 route('POST', '/api/config/dias', async (req, res) => {
   if (!requireAuth(req, res, ['admin'])) return;
   const body = JSON.parse((await readBody(req)).toString('utf-8') || '{}');
@@ -297,15 +296,13 @@ route('POST', '/api/config/dias', async (req, res) => {
   db.prepare('INSERT OR REPLACE INTO meta (key, value) VALUES (?,?)').run('dias_configurados', String(dias));
   sendJson(res, 200, { ok: true, dias_configurados: dias });
 });
- 
+
 // ---------- Gestion de usuarios (solo admin) ----------
-// GET /api/admin/users - listar usuarios (sin password)
 route('GET', '/api/admin/users', async (req, res) => {
   if (!requireAuth(req, res, ['admin'])) return;
   const rows = db.prepare('SELECT id, username, role FROM users ORDER BY role, username').all();
   sendJson(res, 200, rows);
 });
-// POST /api/admin/users - crear usuario nuevo { username, password, role }
 route('POST', '/api/admin/users', async (req, res) => {
   if (!requireAuth(req, res, ['admin'])) return;
   const body = JSON.parse((await readBody(req)).toString('utf-8') || '{}');
@@ -326,7 +323,6 @@ route('POST', '/api/admin/users', async (req, res) => {
   }
   sendJson(res, 200, { ok: true });
 });
-// DELETE /api/admin/users/:id - borrar usuario
 route('DELETE', '/api/admin/users/:id', async (req, res, params) => {
   const session = requireAuth(req, res, ['admin']);
   if (!session) return;
@@ -337,7 +333,6 @@ route('DELETE', '/api/admin/users/:id', async (req, res, params) => {
   db.prepare('DELETE FROM users WHERE id = ?').run(params.id);
   sendJson(res, 200, { ok: true });
 });
-// POST /api/admin/users/:id/reset-password - resetear contraseña { password }
 route('POST', '/api/admin/users/:id/reset-password', async (req, res, params) => {
   if (!requireAuth(req, res, ['admin'])) return;
   const body = JSON.parse((await readBody(req)).toString('utf-8') || '{}');
@@ -346,9 +341,8 @@ route('POST', '/api/admin/users/:id/reset-password', async (req, res, params) =>
   db.prepare('UPDATE users SET password_hash = ?, salt = ? WHERE id = ?').run(hash, salt, params.id);
   sendJson(res, 200, { ok: true });
 });
- 
+
 // ---------- Ranking de marcas y clientes (para la vista online) ----------
-// GET /api/ranking/marcas?mes=&anio=&categoria=&supervisor=&camionero=&vendedor=&dia= - ranking de marcas de una categoria
 route('GET', '/api/ranking/marcas', async (req, res) => {
   if (!requireAuth(req, res, ['admin', 'supervisor', 'vendedor'])) return;
   const parsed = url.parse(req.url, true);
@@ -365,7 +359,6 @@ route('GET', '/api/ranking/marcas', async (req, res) => {
   `).all(categoria, mes, anio, ...params);
   sendJson(res, 200, rows.map(r => ({ marca: r.marca, hl: Math.round(r.hl * 1000) / 1000 })));
 });
-// GET /api/ranking/clientes?mes=&anio=&categoria=&marca=&supervisor=&camionero=&vendedor=&dia= - top 15 clientes de esa marca
 route('GET', '/api/ranking/clientes', async (req, res) => {
   if (!requireAuth(req, res, ['admin', 'supervisor', 'vendedor'])) return;
   const parsed = url.parse(req.url, true);
@@ -374,8 +367,8 @@ route('GET', '/api/ranking/clientes', async (req, res) => {
   const categoria = parsed.query.categoria || '';
   const marca = parsed.query.marca || '';
   if (!mes || !anio || !categoria || !marca) return sendJson(res, 400, { error: 'Faltan parametros mes, anio, categoria y marca' });
+  if (!mes || !anio || !categoria || !marca) return sendJson(res, 400, { error: 'Faltan parametros mes, anio, categoria y marca' });
   const filtros = buildFiltros(parsed.query);
-  // Esta consulta siempre necesita el JOIN con clientes (para traer razon_social/domicilio), independientemente de los filtros.
   const rows = db.prepare(`
     SELECT v.cliente_id as cliente_id, c.razon_social as razon_social, c.domicilio as domicilio, SUM(v.um_hl) as hl
     FROM ventas v LEFT JOIN clientes c ON c.cliente_id = v.cliente_id
@@ -390,9 +383,8 @@ route('GET', '/api/ranking/clientes', async (req, res) => {
     hl: Math.round(r.hl * 1000) / 1000,
   })));
 });
- 
-// ---------- Referencia Vendedor-Supervisor (para que las subidas de ventas-solo no dependan de un archivo local) ----------
-// GET /api/referencia/supervisores - cualquiera logueado puede leerla
+
+// ---------- Referencia Vendedor-Supervisor ----------
 route('GET', '/api/referencia/supervisores', async (req, res) => {
   if (!requireAuth(req, res, ['admin', 'supervisor', 'vendedor'])) return;
   const row = db.prepare('SELECT value FROM meta WHERE key = ?').get('sup_ref_json');
@@ -400,7 +392,6 @@ route('GET', '/api/referencia/supervisores', async (req, res) => {
   if (row) { try { mapping = JSON.parse(row.value); } catch (e) { mapping = {}; } }
   sendJson(res, 200, { mapping });
 });
-// POST /api/referencia/supervisores - solo admin puede actualizarla { mapping: { "NORMALIZADO": "Supervisor" } }
 route('POST', '/api/referencia/supervisores', async (req, res) => {
   if (!requireAuth(req, res, ['admin'])) return;
   const body = JSON.parse((await readBody(req)).toString('utf-8') || '{}');
@@ -408,8 +399,8 @@ route('POST', '/api/referencia/supervisores', async (req, res) => {
   db.prepare('INSERT OR REPLACE INTO meta (key, value) VALUES (?,?)').run('sup_ref_json', JSON.stringify(body.mapping));
   sendJson(res, 200, { ok: true, cantidad: Object.keys(body.mapping).length });
 });
- 
-// GET /api/ranking/clientes-categoria?mes=&anio=&categoria=&limit=&supervisor=&camionero=&vendedor=&dia= - top N clientes de TODA la categoria (todas las marcas sumadas)
+
+// GET /api/ranking/clientes-categoria?mes=&anio=&categoria=&limit=&supervisor=&camionero=&vendedor=&dia= - top N clientes de TODA la categoria
 route('GET', '/api/ranking/clientes-categoria', async (req, res) => {
   if (!requireAuth(req, res, ['admin', 'supervisor', 'vendedor'])) return;
   const parsed = url.parse(req.url, true);
@@ -433,7 +424,7 @@ route('GET', '/api/ranking/clientes-categoria', async (req, res) => {
     hl: Math.round(r.hl * 1000) / 1000,
   })));
 });
- 
+
 // GET /api/compradores?mes=&anio=&supervisor=&camionero=&vendedor=&dia= - cantidad de clientes distintos que compraron, por categoria
 route('GET', '/api/compradores', async (req, res) => {
   if (!requireAuth(req, res, ['admin', 'supervisor', 'vendedor'])) return;
@@ -452,14 +443,13 @@ route('GET', '/api/compradores', async (req, res) => {
     `).all(cat, mes, anio, ...params);
     resultado[cat] = rows.length;
   }
-  // Total de compradores distintos (en cualquier categoria)
   const totalRows = db.prepare(`
     SELECT DISTINCT v.cliente_id FROM ventas v ${join}
     WHERE v.mes = ? AND v.anio = ?${clause}
   `).all(mes, anio, ...params);
   sendJson(res, 200, { categorias: resultado, total: totalRows.length });
 });
- 
+
 const MIME = {
   '.html': 'text/html; charset=utf-8',
   '.js': 'application/javascript; charset=utf-8',
