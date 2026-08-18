@@ -122,12 +122,11 @@
     </div>
   </div>
   <div class="wrap">
-
-  <div id="tabPanel">
+      <div id="tabPanel">
 
     <div class="periodo">
       <span>Periodo:</span>
-     <select id="mesInput">
+      <select id="mesInput">
         <option value="1">Enero</option>
         <option value="2">Febrero</option>
         <option value="3">Marzo</option>
@@ -232,12 +231,7 @@
 
   <div id="tabConfig" class="hidden">
 
-    <div class="section" id="uploadVentasSection">
-      <h2>Actualizar archivo de ventas del día</h2>
-      <div class="config-row">
-        <input type="file" id="fileVentasHoy" accept=".xlsx,.xls" style="background:var(--card2); color:var(--text); border:1px solid var(--border); padding:8px; border-radius:6px;">
-        <button onclick="procesarVentasHoy()">Procesar y subir</button>
-            <div class="section" id="uploadJsonSection">
+    <div class="section" id="uploadJsonSection">
       <h2>Subir histórico ya procesado (JSON)</h2>
       <div class="config-row">
         <input type="file" id="fileHistoricoJson" accept=".json" style="background:var(--card2); color:var(--text); border:1px solid var(--border); padding:8px; border-radius:6px;">
@@ -246,10 +240,15 @@
       <div id="uploadJsonMsg" class="msg"></div>
       <p class="note">Usar solo para meses históricos con archivos Excel demasiado grandes para procesar en el navegador. Este archivo ya viene pre-calculado.</p>
     </div>
+        <div class="section" id="uploadVentasSection">
+      <h2>Actualizar archivo de ventas del día</h2>
+      <div class="config-row">
+        <input type="file" id="fileVentasHoy" accept=".xlsx,.xls" style="background:var(--card2); color:var(--text); border:1px solid var(--border); padding:8px; border-radius:6px;">
+        <button onclick="procesarVentasHoy()">Procesar y subir</button>
       </div>
       <div id="uploadVentasMsg" class="msg"></div>
-      <p class="note">El archivo debe tener las columnas: Descripción DIVISION, Descripción MARCA, Cliente, Descripcion Vendedor, Descripcion Supervisor, Impositivo, UM Total, Anulado, Fecha Comprobante, Descripcion Transporte, Descripcion de Articulo. Puede tardar 1-3 minutos en archivos grandes.</p>
-      </div>
+      <p class="note">El archivo debe tener las columnas: Descripción DIVISION, Descripción MARCA, Cliente, Descripcion Vendedor, Descripcion Supervisor, Impositivo, UM Total, Anulado, Fecha Comprobante, Descripcion Transporte, Descripcion de Articulo. Se procesa directo en el servidor, admite archivos grandes.</p>
+    </div>
 
     <div class="section" id="adminSupRefSection" style="display:none;">
       <h2>Actualizar mapeo Vendedor-Supervisor (solo admin)</h2>
@@ -324,7 +323,8 @@ function showTab(tab){
   document.getElementById('tabBtnPanel').style.background = tab === 'panel' ? 'rgba(255,255,255,.15)' : 'transparent';
   document.getElementById('tabBtnConfig').style.background = tab === 'config' ? 'rgba(255,255,255,.15)' : 'transparent';
 }
-  function doLogout(){
+
+function doLogout(){
   TOKEN = null; ROLE = null;
   document.getElementById('mainScreen').classList.add('hidden');
   document.getElementById('loginScreen').classList.remove('hidden');
@@ -396,6 +396,7 @@ function renderKpis(data){
         <div class="kpi-row"><span>Proyectado</span><span>${k.proyectado !== null ? fmtHL(k.proyectado) : 'Cargar dias configurados'}</span></div>
         <div class="kpi-row"><span>${NOMBRES_MES[data.mes]} ${data.anio-1}</span><span>${fmtHL(k.anio_anterior)}</span></div>
         <div class="kpi-row"><span>Variación</span><span class="badge ${badgeClass}">${badgeText}</span></div>
+                <div class="kpi-row"><span>Variación</span><span class="badge ${badgeClass}">${badgeText}</span></div>
       </div>
     `;
   }
@@ -473,8 +474,9 @@ function exportarClientesExcel(){
   const wb = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(wb, ws, 'Clientes');
   XLSX.writeFile(wb, 'ranking_clientes.xlsx');
-  }
-  async function loadFiltrosOpciones(){
+}
+
+async function loadFiltrosOpciones(){
   try{
     const res = await fetch(API + '/api/filtros/opciones', {headers: authHeaders()});
     const data = await res.json();
@@ -511,7 +513,6 @@ function filtrosQueryString(){
   return qs;
 }
 
-// ---------- Utilidades de lectura de Excel (mismas que el dashboard grande) ----------
 const CAT_MAP = {'CERVEZA':'Cervezas','AGUA':'Aguas','VINOS':'Vinos','SIDRAS':'Sidras'};
 const normName = s => (s||'').toString().toUpperCase().trim().split(/\s+/).sort().join(' ');
 function readWorkbook(file){
@@ -536,10 +537,10 @@ function findColIndex(headerRow, name){
   return -1;
 }
 
-// ---------- Actualizar mapeo Vendedor-Supervisor (admin) ----------
 async function procesarSupRef(){
   const file = document.getElementById('fileSupRef').files[0];
   if(!file){ showMsg('supRefMsg', 'Elegí un archivo', false); return; }
+    if(!file){ showMsg('supRefMsg', 'Elegí un archivo', false); return; }
   showMsg('supRefMsg', 'Leyendo archivo...', true);
   try{
     const wb = await readWorkbook(file);
@@ -567,7 +568,7 @@ async function procesarSupRef(){
     showMsg('supRefMsg', 'Error: ' + e.message, false);
   }
 }
-// ---------- Subir historico ya procesado (JSON pre-agregado, para archivos gigantes) ----------
+
 async function procesarHistoricoJson(){
   const file = document.getElementById('fileHistoricoJson').files[0];
   if(!file){ showMsg('uploadJsonMsg', 'Elegí un archivo', false); return; }
@@ -603,123 +604,25 @@ async function procesarHistoricoJson(){
   }
 }
 
-  // ---------- Procesar y subir ventas del día (admin + supervisor) ----------
 async function procesarVentasHoy(){
   const file = document.getElementById('fileVentasHoy').files[0];
   if(!file){ showMsg('uploadVentasMsg', 'Elegí un archivo', false); return; }
-  showMsg('uploadVentasMsg', 'Leyendo archivo (puede tardar unos minutos)...', true);
+  showMsg('uploadVentasMsg', 'Subiendo y procesando en el servidor (puede tardar varios minutos en archivos grandes)...', true);
   try{
-    const refRes = await fetch(API + '/api/referencia/supervisores', {headers: authHeaders()});
-    const refData = await refRes.json();
-    const supRef = refData.mapping || {};
-
-    const wb = await readWorkbook(file);
-    const ws = wb.Sheets[wb.SheetNames[0]];
-    const rows = getDenseRows(ws);
-    if(!rows || rows.length < 2) throw new Error('El archivo de ventas está vacío o no se pudo leer.');
-    const header = rows[0];
-    const idx = {
-      division: findColIndex(header,'Descripción DIVISION'),
-      marca: findColIndex(header,'Descripción MARCA'),
-      cliente: findColIndex(header,'Cliente'),
-      vendedor: findColIndex(header,'Descripcion Vendedor'),
-      supervisor: findColIndex(header,'Descripcion Supervisor'),
-      impositivo: findColIndex(header,'Impositivo'),
-      um: findColIndex(header,'UM Total'),
-      anulado: findColIndex(header,'Anulado'),
-    };
-    for(const k in idx){ if(idx[k] < 0) throw new Error('Falta la columna requerida: ' + k); }
-    const fechaIdx = findColIndex(header, 'Fecha Comprobante');
-    const transpIdx = findColIndex(header, 'Descripcion Transporte');
-    const articuloIdx = findColIndex(header, 'Descripcion de Articulo');
-
-    const vendAppAgg = new Map();
-    const ventaDepositoVend = new Set();
-    const fechaSet = new Set();
-    const mesCount = {};
-
-    for(let r=1;r<rows.length;r++){
-      const row = rows[r];
-      if(!row) continue;
-      showMsg('uploadVentasMsg', `Procesando fila ${r} de ${rows.length-1}...`, true);
-      const division = row[idx.division];
-      const cat = CAT_MAP[division];
-      if(!cat) continue;
-      const anulado = row[idx.anulado];
-      if(anulado && anulado !== 'NO') continue;
-      const cliente = row[idx.cliente];
-      const vendedor = row[idx.vendedor] || 'SIN VENDEDOR';
-      const marca = row[idx.marca] || 'SIN MARCA';
-      const um = row[idx.um] || 0;
-      const fiscal = row[idx.impositivo] === 'SI' ? 1 : 0;
-      const transp = (transpIdx >= 0 ? row[transpIdx] : null) || 'SIN TRANSPORTE';
-      const supRaw = row[idx.supervisor];
-      if(!supRaw || String(supRaw).trim()==='') ventaDepositoVend.add(vendedor);
-
-      if(fechaIdx >= 0){
-        const fRaw = row[fechaIdx];
-        let dateObj = null;
-        if(fRaw instanceof Date && !isNaN(fRaw)) dateObj = fRaw;
-        else if(typeof fRaw === 'number' && fRaw > 0) dateObj = new Date(Math.round((fRaw - 25569) * 86400 * 1000));
-        else if(typeof fRaw === 'string' && fRaw.trim()){ const p = new Date(fRaw); if(!isNaN(p)) dateObj = p; }
-        if(dateObj && !isNaN(dateObj)){
-          const dstr = dateObj.getFullYear()+'-'+String(dateObj.getMonth()+1).padStart(2,'0')+'-'+String(dateObj.getDate()).padStart(2,'0');
-          fechaSet.add(dstr);
-          const mkey = dateObj.getFullYear()+'-'+String(dateObj.getMonth()+1).padStart(2,'0');
-          mesCount[mkey] = (mesCount[mkey]||0) + 1;
-        }
-      }
-
-      if(articuloIdx >= 0 && cliente !== undefined && cliente !== null && cliente !== ''){
-        const articulo = row[articuloIdx] || 'SIN ARTICULO';
-        const vaKey = cliente+'|'+cat+'|'+marca+'|'+articulo+'|'+vendedor+'|'+transp+'|'+fiscal;
-        vendAppAgg.set(vaKey, (vendAppAgg.get(vaKey)||0) + um);
-      }
-    }
-
-    let mesActual = '', mkeyOut = null;
-    const bestMes = Object.entries(mesCount).sort((a,b)=>b[1]-a[1])[0];
-    if(bestMes){
-      const [y,m] = bestMes[0].split('-').map(Number);
-      const NOMBRES = ['Enero','Febrero','Marzo','Abril','Mayo','Junio','Julio','Agosto','Septiembre','Octubre','Noviembre','Diciembre'];
-      mesActual = NOMBRES[m-1] + ' ' + y;
-      mkeyOut = y + '_' + String(m).padStart(2,'0');
-    }
-    const mesNumOut = mkeyOut ? Number(mkeyOut.split('_')[1]) : null;
-    const anioNumOut = mkeyOut ? Number(mkeyOut.split('_')[0]) : null;
-
-    const FALLBACK = 'SIN ASIGNAR (no en tabla de referencia)';
-    const ventas = [];
-    for(const [vaKey, um] of vendAppAgg.entries()){
-      if(um < 0.001) continue;
-      const [cliente_id, categoria, marca, articulo, vendedor, camionero, fiscalStr] = vaKey.split('|');
-      let supervisor;
-      if(ventaDepositoVend.has(vendedor)) supervisor = 'VENTA DEPOSITO';
-      else supervisor = supRef[normName(vendedor)] || FALLBACK;
-      ventas.push({
-        cliente_id, categoria, marca, articulo,
-        um_hl: Math.round(um*1000)/1000,
-        supervisor, camionero,
-        tipo_documento: fiscalStr === '1' ? 'FISCAL' : 'NO FISCAL',
-        mes: mesNumOut, anio: anioNumOut,
-      });
-    }
-
-    showMsg('uploadVentasMsg', 'Subiendo al servidor...', true);
-    const res = await fetch(API + '/api/upload', {
-      method: 'POST', headers: {'Content-Type':'application/json', ...authHeaders()},
-      body: JSON.stringify({ clientes: [], ventas, mes_actual: mesActual, mes: mesNumOut, anio: anioNumOut, dias_venta_reales: fechaSet.size })
+    const res = await fetch(API + '/api/upload-excel', {
+      method: 'POST',
+      headers: {'Content-Type':'application/octet-stream', ...authHeaders()},
+      body: file
     });
     const data = await res.json();
     if(!res.ok){ showMsg('uploadVentasMsg', data.error || 'Error subiendo', false); return; }
-    showMsg('uploadVentasMsg', `Listo. ${mesActual}: ${data.ventas} filas guardadas.`, true);
+    showMsg('uploadVentasMsg', `Listo. ${data.mes_actual}: ${data.ventas} filas guardadas.`, true);
     loadKpis();
   }catch(e){
     showMsg('uploadVentasMsg', 'Error: ' + e.message, false);
   }
 }
 
-// ---------- Compradores por categoria ----------
 async function loadCompradores(){
   if(!CURRENT_MES || !CURRENT_ANIO) return;
   const area = document.getElementById('compradoresArea');
@@ -729,7 +632,7 @@ async function loadCompradores(){
     const data = await res.json();
     if(!res.ok){ area.innerHTML = '<div class="loading">' + (data.error||'Error') + '</div>'; return; }
     const cats = ['Cervezas','Aguas','Vinos','Sidras'];
-    const max = Math.max(data.total, 1);
+        const max = Math.max(data.total, 1);
     let html = '';
     for(const cat of cats){
       const n = data.categorias[cat] || 0;
@@ -751,7 +654,7 @@ async function loadCompradores(){
     area.innerHTML = '<div class="loading">Error: ' + e.message + '</div>';
   }
 }
-  // ---------- Top clientes por categoria (todas las marcas) ----------
+
 let TOP_CLIENTES_CATEGORIA = [];
 async function loadTopClientesCategoria(){
   if(!CURRENT_MES || !CURRENT_ANIO) return;
