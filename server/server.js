@@ -441,9 +441,9 @@ route('POST', '/api/admin/users', async (req, res) => {
   if (!username || !password || !role) {
     return sendJson(res, 400, { error: 'Faltan datos: username, password y role son obligatorios' });
   }
-  if (!['admin', 'supervisor', 'vendedor'].includes(role)) {
+   if (!['admin', 'supervisor', 'vendedor'].includes(role)) {
     return sendJson(res, 400, { error: 'Rol invalido' });
-        return sendJson(res, 400, { error: 'Rol invalido' });
+  }
   }
   if (authLib.findUserByUsername(username)) {
     return sendJson(res, 400, { error: 'Ese nombre de usuario ya existe' });
@@ -592,7 +592,6 @@ function serveStatic(req, res, pathname) {
   fs.readFile(filePath, (err, data) => {
     if (err) {
       fs.readFile(path.join(PUBLIC_DIR, 'index.html'), (err2, data2) => {
-              fs.readFile(path.join(PUBLIC_DIR, 'index.html'), (err2, data2) => {
         if (err2) { res.writeHead(404); res.end('Not found'); return; }
         res.writeHead(200, { 'Content-Type': MIME['.html'] });
         res.end(data2);
