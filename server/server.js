@@ -6,6 +6,7 @@ const url = require('url');
 const db = require('./db');
 const authLib = require('./auth');
 const XLSX = require('xlsx');
+const crypto = require('crypto');
 const PORT = process.env.PORT || 3000;
 const PUBLIC_DIR = path.join(__dirname, '..', 'public');
 function sendJson(res, status, obj) {
@@ -141,8 +142,9 @@ route('GET', '/api/cliente/:id', async (req, res, params) => {
   for (const cat of CATS) {
     const rows = db.prepare(`
       SELECT marca, SUM(um_hl) as hl FROM ventas
+            SELECT marca, SUM(um_hl) as hl FROM ventas
       WHERE cliente_id = ? AND categoria = ?
-            GROUP BY marca HAVING SUM(um_hl) >= 0.001
+      GROUP BY marca HAVING SUM(um_hl) >= 0.001
       ORDER BY hl DESC
     `).all(params.id, cat);
     resultado[cat] = rows;
@@ -228,24 +230,16 @@ const normNameServidor = s => (s || '').toString().toUpperCase().trim().split(/\
 function excelSerialToDate(n) {
   return new Date(Math.round((n - 25569) * 86400 * 1000));
 }
-route('POST', '/api/upload-excel', async (req, res) => {
-  const session = requireAuth(req, res, ['admin', 'supervisor']);
-  if (!session) return;
-  let buffer;
-  try {
-    buffer = await readBody(req);
-  } catch (e) {
-    return sendJson(res, 400, { error: 'No se pudo leer el archivo subido: ' + e.message });
-  }
+function procesarExcelYGuardar(buffer) {
   let wb;
   try {
     wb = XLSX.read(buffer, { type: 'buffer', cellDates: true });
   } catch (e) {
-    return sendJson(res, 400, { error: 'No se pudo interpretar el archivo Excel: ' + e.message });
+    throw { status: 400, error: 'No se pudo interpretar el archivo Excel: ' + e.message };
   }
   const ws = wb.Sheets[wb.SheetNames[0]];
   const rows = XLSX.utils.sheet_to_json(ws, { header: 1, raw: true, defval: undefined });
-  if (!rows || rows.length < 2) return sendJson(res, 400, { error: 'El archivo de ventas está vacío o no se pudo leer.' });
+  if (!rows || rows.length < 2) throw { status: 400, error: 'El archivo de ventas está vacío o no se pudo leer.' };
 
   const header = rows[0];
   function findCol(name) {
@@ -262,7 +256,7 @@ route('POST', '/api/upload-excel', async (req, res) => {
     um: findCol('UM Total'),
     anulado: findCol('Anulado'),
   };
-  for (const k in idx) { if (idx[k] < 0) return sendJson(res, 400, { error: 'Falta la columna requerida: ' + k }); }
+  for (const k in idx) { if (idx[k] < 0) throw { status: 400, error: 'Falta la columna requerida: ' + k }; }
   const fechaIdx = findCol('Fecha Comprobante');
   const transpIdx = findCol('Descripcion Transporte');
   const articuloIdx = findCol('Descripcion de Articulo');
@@ -293,7 +287,7 @@ route('POST', '/api/upload-excel', async (req, res) => {
     const transp = (transpIdx >= 0 ? row[transpIdx] : null) || 'SIN TRANSPORTE';
     const supRaw = row[idx.supervisor];
     if (!supRaw || String(supRaw).trim() === '') ventaDepositoVend.add(vendedor);
-    
+
     if (fechaIdx >= 0) {
       const fRaw = row[fechaIdx];
       let dateObj = null;
@@ -301,7 +295,7 @@ route('POST', '/api/upload-excel', async (req, res) => {
       else if (typeof fRaw === 'number' && fRaw > 0) dateObj = excelSerialToDate(fRaw);
       else if (typeof fRaw === 'string' && fRaw.trim()) { const p = new Date(fRaw); if (!isNaN(p)) dateObj = p; }
       if (dateObj && !isNaN(dateObj)) {
-        const dstr = dateObj.getFullYear() + '-' + String(dateObj.getMonth() + 1).padStart(2, '0') + '-' + String(dateObj.getDate()).padStart(2, '0');
+                const dstr = dateObj.getFullYear() + '-' + String(dateObj.getMonth() + 1).padStart(2, '0') + '-' + String(dateObj.getDate()).padStart(2, '0');
         fechaSet.add(dstr);
         const mkey = dateObj.getFullYear() + '-' + String(dateObj.getMonth() + 1).padStart(2, '0');
         mesCount[mkey] = (mesCount[mkey] || 0) + 1;
@@ -344,9 +338,77 @@ route('POST', '/api/upload-excel', async (req, res) => {
   try {
     resultado = guardarVentas({ clientes: [], ventas, mes_actual: mesActual, mes: mesNumOut, anio: anioNumOut, dias_venta_reales: fechaSet.size });
   } catch (e) {
-    return sendJson(res, 500, { error: 'Error guardando datos: ' + e.message });
+    throw { status: 500, error: 'Error guardando datos: ' + e.message };
   }
-  sendJson(res, 200, { ok: true, mes_actual: mesActual, ventas: resultado.ventas });
+  return { ok: true, mes_actual: mesActual, ventas: resultado.ventas };
+}
+
+route('POST', '/api/upload-excel', async (req, res) => {
+  const session = requireAuth(req, res, ['admin', 'supervisor']);
+  if (!session) return;
+  let buffer;
+  try {
+    buffer = await readBody(req);
+  } catch (e) {
+    return sendJson(res, 400, { error: 'No se pudo leer el archivo subido: ' + e.message });
+  }
+  try {
+    const resultado = procesarExcelYGuardar(buffer);
+    sendJson(res, 200, resultado);
+  } catch (e) {
+    sendJson(res, e.status || 500, { error: e.error || e.message || 'Error desconocido' });
+  }
+});
+
+const DATA_DIR = process.env.DB_PATH ? path.dirname(process.env.DB_PATH) : path.join(__dirname, '..', 'data');
+const TMP_DIR = path.join(DATA_DIR, 'tmp_uploads');
+try { fs.mkdirSync(TMP_DIR, { recursive: true }); } catch (e) {}
+
+function tmpPathFor(uploadId) {
+  if (!/^[a-f0-9]{32}$/.test(uploadId)) return null;
+  return path.join(TMP_DIR, uploadId + '.bin');
+}
+
+route('POST', '/api/upload-excel/start', async (req, res) => {
+  const session = requireAuth(req, res, ['admin', 'supervisor']);
+  if (!session) return;
+  const uploadId = crypto.randomBytes(16).toString('hex');
+  const filePath = tmpPathFor(uploadId);
+  fs.writeFileSync(filePath, Buffer.alloc(0));
+  sendJson(res, 200, { uploadId });
+});
+
+route('POST', '/api/upload-excel/chunk', async (req, res) => {
+  const session = requireAuth(req, res, ['admin', 'supervisor']);
+  if (!session) return;
+  const parsed = url.parse(req.url, true);
+  const filePath = tmpPathFor(parsed.query.uploadId || '');
+  if (!filePath || !fs.existsSync(filePath)) return sendJson(res, 400, { error: 'uploadId invalido o expirado' });
+  let chunk;
+  try {
+    chunk = await readBody(req);
+  } catch (e) {
+    return sendJson(res, 400, { error: 'No se pudo leer el pedazo: ' + e.message });
+  }
+  fs.appendFileSync(filePath, chunk);
+  sendJson(res, 200, { ok: true, size: fs.statSync(filePath).size });
+});
+
+route('POST', '/api/upload-excel/finish', async (req, res) => {
+  const session = requireAuth(req, res, ['admin', 'supervisor']);
+  if (!session) return;
+  const parsed = url.parse(req.url, true);
+  const filePath = tmpPathFor(parsed.query.uploadId || '');
+  if (!filePath || !fs.existsSync(filePath)) return sendJson(res, 400, { error: 'uploadId invalido o expirado' });
+  try {
+    const buffer = fs.readFileSync(filePath);
+    const resultado = procesarExcelYGuardar(buffer);
+    sendJson(res, 200, resultado);
+  } catch (e) {
+    sendJson(res, e.status || 500, { error: e.error || e.message || 'Error desconocido' });
+  } finally {
+    try { fs.unlinkSync(filePath); } catch (e) {}
+  }
 });
 
 function buildFiltros(query) {
@@ -383,8 +445,7 @@ route('GET', '/api/kpis', async (req, res) => {
   const diasConfigurados = diasConfigRow ? Number(diasConfigRow.value) : null;
   const diasRealesRow = db.prepare('SELECT value FROM meta WHERE key = ?').get(`dias_reales_${anio}_${String(mes).padStart(2, '0')}`);
   const diasReales = diasRealesRow ? Number(diasRealesRow.value) : null;
-
-  const CATS = ['Cervezas', 'Aguas', 'Vinos', 'Sidras'];
+    const CATS = ['Cervezas', 'Aguas', 'Vinos', 'Sidras'];
   const resultado = {};
   for (const cat of CATS) {
     const actualRow = db.prepare(`SELECT SUM(v.um_hl) as total FROM ventas v ${join} WHERE v.categoria = ? AND v.mes = ? AND v.anio = ?${clause}`).get(cat, mes, anio, ...params);
@@ -441,7 +502,7 @@ route('POST', '/api/admin/users', async (req, res) => {
   if (!username || !password || !role) {
     return sendJson(res, 400, { error: 'Faltan datos: username, password y role son obligatorios' });
   }
-   if (!['admin', 'supervisor', 'vendedor'].includes(role)) {
+  if (!['admin', 'supervisor', 'vendedor'].includes(role)) {
     return sendJson(res, 400, { error: 'Rol invalido' });
   }
   if (authLib.findUserByUsername(username)) {
@@ -519,7 +580,7 @@ route('GET', '/api/referencia/supervisores', async (req, res) => {
   let mapping = {};
   if (row) { try { mapping = JSON.parse(row.value); } catch (e) { mapping = {}; } }
   sendJson(res, 200, { mapping });
-});
+  });
 route('POST', '/api/referencia/supervisores', async (req, res) => {
   if (!requireAuth(req, res, ['admin'])) return;
   const body = JSON.parse((await readBody(req)).toString('utf-8') || '{}');
