@@ -8,5 +8,8 @@
   "scripts": {
     "seed": "node server/seed.js",
     "start": "node server/server.js"
+  },
+  "dependencies": {
+    "xlsx": "^0.18.5"
   }
 }
