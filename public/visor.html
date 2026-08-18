@@ -536,11 +536,9 @@ function findColIndex(headerRow, name){
   for(let i=0;i<headerRow.length;i++){ if(headerRow[i] === name) return i; }
   return -1;
 }
-
 async function procesarSupRef(){
   const file = document.getElementById('fileSupRef').files[0];
   if(!file){ showMsg('supRefMsg', 'Elegí un archivo', false); return; }
-    if(!file){ showMsg('supRefMsg', 'Elegí un archivo', false); return; }
   showMsg('supRefMsg', 'Leyendo archivo...', true);
   try{
     const wb = await readWorkbook(file);
@@ -636,23 +634,7 @@ async function procesarVentasHoy(){
     });
     const data = await finishRes.json();
     if(!finishRes.ok){ showMsg('uploadVentasMsg', data.error || 'Error procesando', false); return; }
-    showMsg('uploadVentasMsg', `Listo. ${data.mes_actual}: ${data.ventas} filas guardadas.`, true);
-    loadKpis();
-  }catch(e){
-    showMsg('uploadVentasMsg', 'Error: ' + e.message, false);
-  }
-  const file = document.getElementById('fileVentasHoy').files[0];
-  if(!file){ showMsg('uploadVentasMsg', 'Elegí un archivo', false); return; }
-  showMsg('uploadVentasMsg', 'Subiendo y procesando en el servidor (puede tardar varios minutos en archivos grandes)...', true);
-  try{
-    const res = await fetch(API + '/api/upload-excel', {
-      method: 'POST',
-      headers: {'Content-Type':'application/octet-stream', ...authHeaders()},
-      body: file
-    });
-    const data = await res.json();
-    if(!res.ok){ showMsg('uploadVentasMsg', data.error || 'Error subiendo', false); return; }
-    showMsg('uploadVentasMsg', `Listo. ${data.mes_actual}: ${data.ventas} filas guardadas.`, true);
+        showMsg('uploadVentasMsg', `Listo. ${data.mes_actual}: ${data.ventas} filas guardadas.`, true);
     loadKpis();
   }catch(e){
     showMsg('uploadVentasMsg', 'Error: ' + e.message, false);
