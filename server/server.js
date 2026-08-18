@@ -444,7 +444,6 @@ route('POST', '/api/admin/users', async (req, res) => {
    if (!['admin', 'supervisor', 'vendedor'].includes(role)) {
     return sendJson(res, 400, { error: 'Rol invalido' });
   }
-  }
   if (authLib.findUserByUsername(username)) {
     return sendJson(res, 400, { error: 'Ese nombre de usuario ya existe' });
   }
