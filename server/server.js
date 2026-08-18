@@ -1,13 +1,13 @@
-// server.js - Servidor HTTP principal (sin dependencias externas, solo Node)
+// server.js - Servidor HTTP principal
 const http = require('http');
 const fs = require('fs');
 const path = require('path');
 const url = require('url');
 const db = require('./db');
 const authLib = require('./auth');
+const XLSX = require('xlsx');
 const PORT = process.env.PORT || 3000;
 const PUBLIC_DIR = path.join(__dirname, '..', 'public');
-// ---------- Utilidades ----------
 function sendJson(res, status, obj) {
   const body = JSON.stringify(obj);
   res.writeHead(status, {
@@ -22,7 +22,7 @@ function readBody(req) {
     let size = 0;
     req.on('data', (c) => {
       size += c.length;
-      if (size > 60 * 1024 * 1024) {
+      if (size > 200 * 1024 * 1024) {
         reject(new Error('Body demasiado grande'));
         req.destroy();
         return;
@@ -142,7 +142,7 @@ route('GET', '/api/cliente/:id', async (req, res, params) => {
     const rows = db.prepare(`
       SELECT marca, SUM(um_hl) as hl FROM ventas
       WHERE cliente_id = ? AND categoria = ?
-      GROUP BY marca HAVING SUM(um_hl) >= 0.001
+            GROUP BY marca HAVING SUM(um_hl) >= 0.001
       ORDER BY hl DESC
     `).all(params.id, cat);
     resultado[cat] = rows;
@@ -159,15 +159,9 @@ route('GET', '/api/cliente/:id/marca/:marca', async (req, res, params) => {
   `).all(params.id, params.marca);
   sendJson(res, 200, rows);
 });
-route('POST', '/api/upload', async (req, res) => {
-  const session = requireAuth(req, res, ['admin', 'supervisor']);
-  if (!session) return;
-  const raw = (await readBody(req)).toString('utf-8');
-  let data;
-  try { data = JSON.parse(raw); } catch (e) { return sendJson(res, 400, { error: 'JSON invalido' }); }
-  const { clientes, ventas, mes_actual, mes, anio, dias_venta_reales } = data;
+function guardarVentas({ clientes, ventas, mes_actual, mes, anio, dias_venta_reales }) {
   if (!Array.isArray(clientes) || !Array.isArray(ventas)) {
-    return sendJson(res, 400, { error: 'Formato invalido: se esperaba {clientes:[], ventas:[]}' });
+    throw new Error('Formato invalido: se esperaba {clientes:[], ventas:[]}');
   }
   db.exec('BEGIN');
   try {
@@ -199,7 +193,6 @@ route('POST', '/api/upload', async (req, res) => {
     if (mes && anio && dias_venta_reales) {
       setMeta.run(`dias_reales_${anio}_${String(mes).padStart(2, '0')}`, String(dias_venta_reales));
     }
-    // Retencion: conserva solo los ultimos 13 meses de historico, borra lo mas viejo
     if (mes && anio) {
       const periodoActual = anio * 12 + mes;
       const periodoLimite = periodoActual - 13;
@@ -210,18 +203,152 @@ route('POST', '/api/upload', async (req, res) => {
     db.exec('COMMIT');
   } catch (e) {
     db.exec('ROLLBACK');
+    throw e;
+  }
+  return { clientes: clientes.length, ventas: ventas.length };
+}
+
+route('POST', '/api/upload', async (req, res) => {
+  const session = requireAuth(req, res, ['admin', 'supervisor']);
+  if (!session) return;
+  const raw = (await readBody(req)).toString('utf-8');
+  let data;
+  try { data = JSON.parse(raw); } catch (e) { return sendJson(res, 400, { error: 'JSON invalido' }); }
+  let resultado;
+  try {
+    resultado = guardarVentas(data);
+  } catch (e) {
     return sendJson(res, 500, { error: 'Error guardando datos: ' + e.message });
   }
-  sendJson(res, 200, { ok: true, clientes: clientes.length, ventas: ventas.length });
+  sendJson(res, 200, { ok: true, clientes: resultado.clientes, ventas: resultado.ventas });
 });
-route('GET', '/api/meta', async (req, res) => {
-  if (!requireAuth(req, res, ['admin', 'supervisor', 'vendedor'])) return;
-  const rows = db.prepare('SELECT key, value FROM meta').all();
-  const out = {};
-  rows.forEach(r => out[r.key] = r.value);
-  sendJson(res, 200, out);
+
+const CAT_MAP_SERVIDOR = { 'CERVEZA': 'Cervezas', 'AGUA': 'Aguas', 'VINOS': 'Vinos', 'SIDRAS': 'Sidras' };
+const normNameServidor = s => (s || '').toString().toUpperCase().trim().split(/\s+/).sort().join(' ');
+function excelSerialToDate(n) {
+  return new Date(Math.round((n - 25569) * 86400 * 1000));
+}
+route('POST', '/api/upload-excel', async (req, res) => {
+  const session = requireAuth(req, res, ['admin', 'supervisor']);
+  if (!session) return;
+  let buffer;
+  try {
+    buffer = await readBody(req);
+  } catch (e) {
+    return sendJson(res, 400, { error: 'No se pudo leer el archivo subido: ' + e.message });
+  }
+  let wb;
+  try {
+    wb = XLSX.read(buffer, { type: 'buffer', cellDates: true });
+  } catch (e) {
+    return sendJson(res, 400, { error: 'No se pudo interpretar el archivo Excel: ' + e.message });
+  }
+  const ws = wb.Sheets[wb.SheetNames[0]];
+  const rows = XLSX.utils.sheet_to_json(ws, { header: 1, raw: true, defval: undefined });
+  if (!rows || rows.length < 2) return sendJson(res, 400, { error: 'El archivo de ventas está vacío o no se pudo leer.' });
+
+  const header = rows[0];
+  function findCol(name) {
+    for (let i = 0; i < header.length; i++) { if (header[i] === name) return i; }
+    return -1;
+  }
+  const idx = {
+    division: findCol('Descripción DIVISION'),
+    marca: findCol('Descripción MARCA'),
+    cliente: findCol('Cliente'),
+    vendedor: findCol('Descripcion Vendedor'),
+    supervisor: findCol('Descripcion Supervisor'),
+    impositivo: findCol('Impositivo'),
+    um: findCol('UM Total'),
+    anulado: findCol('Anulado'),
+  };
+  for (const k in idx) { if (idx[k] < 0) return sendJson(res, 400, { error: 'Falta la columna requerida: ' + k }); }
+  const fechaIdx = findCol('Fecha Comprobante');
+  const transpIdx = findCol('Descripcion Transporte');
+  const articuloIdx = findCol('Descripcion de Articulo');
+
+  const supRefRow = db.prepare('SELECT value FROM meta WHERE key = ?').get('sup_ref_json');
+  let supRef = {};
+  if (supRefRow) { try { supRef = JSON.parse(supRefRow.value); } catch (e) { supRef = {}; } }
+  const FALLBACK = 'SIN ASIGNAR (no en tabla de referencia)';
+
+  const vendAppAgg = new Map();
+  const ventaDepositoVend = new Set();
+  const fechaSet = new Set();
+  const mesCount = {};
+
+  for (let r = 1; r < rows.length; r++) {
+    const row = rows[r];
+    if (!row) continue;
+    const division = row[idx.division];
+    const cat = CAT_MAP_SERVIDOR[division];
+    if (!cat) continue;
+    const anulado = row[idx.anulado];
+    if (anulado && anulado !== 'NO') continue;
+    const cliente = row[idx.cliente];
+    const vendedor = row[idx.vendedor] || 'SIN VENDEDOR';
+    const marca = row[idx.marca] || 'SIN MARCA';
+    const um = row[idx.um] || 0;
+    const fiscal = row[idx.impositivo] === 'SI' ? 1 : 0;
+    const transp = (transpIdx >= 0 ? row[transpIdx] : null) || 'SIN TRANSPORTE';
+    const supRaw = row[idx.supervisor];
+    if (!supRaw || String(supRaw).trim() === '') ventaDepositoVend.add(vendedor);
+    
+    if (fechaIdx >= 0) {
+      const fRaw = row[fechaIdx];
+      let dateObj = null;
+      if (fRaw instanceof Date && !isNaN(fRaw)) dateObj = fRaw;
+      else if (typeof fRaw === 'number' && fRaw > 0) dateObj = excelSerialToDate(fRaw);
+      else if (typeof fRaw === 'string' && fRaw.trim()) { const p = new Date(fRaw); if (!isNaN(p)) dateObj = p; }
+      if (dateObj && !isNaN(dateObj)) {
+        const dstr = dateObj.getFullYear() + '-' + String(dateObj.getMonth() + 1).padStart(2, '0') + '-' + String(dateObj.getDate()).padStart(2, '0');
+        fechaSet.add(dstr);
+        const mkey = dateObj.getFullYear() + '-' + String(dateObj.getMonth() + 1).padStart(2, '0');
+        mesCount[mkey] = (mesCount[mkey] || 0) + 1;
+      }
+    }
+
+    if (articuloIdx >= 0 && cliente !== undefined && cliente !== null && cliente !== '') {
+      const articulo = row[articuloIdx] || 'SIN ARTICULO';
+      const vaKey = cliente + '|' + cat + '|' + marca + '|' + articulo + '|' + vendedor + '|' + transp + '|' + fiscal;
+      vendAppAgg.set(vaKey, (vendAppAgg.get(vaKey) || 0) + um);
+    }
+  }
+
+  let mesActual = '', mesNumOut = null, anioNumOut = null;
+  const bestMesEntry = Object.entries(mesCount).sort((a, b) => b[1] - a[1])[0];
+  if (bestMesEntry) {
+    const [y, m] = bestMesEntry[0].split('-').map(Number);
+    const NOMBRES = ['Enero', 'Febrero', 'Marzo', 'Abril', 'Mayo', 'Junio', 'Julio', 'Agosto', 'Septiembre', 'Octubre', 'Noviembre', 'Diciembre'];
+    mesActual = NOMBRES[m - 1] + ' ' + y;
+    mesNumOut = m; anioNumOut = y;
+  }
+
+  const ventas = [];
+  for (const [vaKey, um] of vendAppAgg.entries()) {
+    if (um < 0.001) continue;
+    const [cliente_id, categoria, marca, articulo, vendedor, camionero, fiscalStr] = vaKey.split('|');
+    let supervisor;
+    if (ventaDepositoVend.has(vendedor)) supervisor = 'VENTA DEPOSITO';
+    else supervisor = supRef[normNameServidor(vendedor)] || FALLBACK;
+    ventas.push({
+      cliente_id, categoria, marca, articulo,
+      um_hl: Math.round(um * 1000) / 1000,
+      supervisor, camionero,
+      tipo_documento: fiscalStr === '1' ? 'FISCAL' : 'NO FISCAL',
+      mes: mesNumOut, anio: anioNumOut,
+    });
+  }
+
+  let resultado;
+  try {
+    resultado = guardarVentas({ clientes: [], ventas, mes_actual: mesActual, mes: mesNumOut, anio: anioNumOut, dias_venta_reales: fechaSet.size });
+  } catch (e) {
+    return sendJson(res, 500, { error: 'Error guardando datos: ' + e.message });
+  }
+  sendJson(res, 200, { ok: true, mes_actual: mesActual, ventas: resultado.ventas });
 });
-// Arma la clausula WHERE y el JOIN necesarios segun los filtros opcionales que vengan en el query string
+
 function buildFiltros(query) {
   const filtros = { supervisor: query.supervisor || '', camionero: query.camionero || '', vendedor: query.vendedor || '', dia: query.dia || '' };
   let needsJoin = !!(filtros.vendedor || filtros.dia);
@@ -235,7 +362,6 @@ function buildFiltros(query) {
   return { clause, params, join };
 }
 
-// ---------- Opciones de filtros (para los desplegables) ----------
 route('GET', '/api/filtros/opciones', async (req, res) => {
   if (!requireAuth(req, res, ['admin', 'supervisor', 'vendedor'])) return;
   const supervisores = db.prepare(`SELECT DISTINCT supervisor FROM ventas WHERE supervisor IS NOT NULL AND supervisor != '' ORDER BY supervisor`).all().map(r => r.supervisor);
@@ -245,7 +371,6 @@ route('GET', '/api/filtros/opciones', async (req, res) => {
   sendJson(res, 200, { supervisores, camioneros, vendedores, dias });
 });
 
-// ---------- KPIs por division (para la vista online) ----------
 route('GET', '/api/kpis', async (req, res) => {
   if (!requireAuth(req, res, ['admin', 'supervisor', 'vendedor'])) return;
   const parsed = url.parse(req.url, true);
@@ -290,7 +415,6 @@ route('GET', '/api/meta', async (req, res) => {
   sendJson(res, 200, out);
 });
 
-// ---------- Configuracion (dias del mes para proyeccion) ----------
 route('GET', '/api/config/dias', async (req, res) => {
   if (!requireAuth(req, res, ['admin', 'supervisor', 'vendedor'])) return;
   const row = db.prepare('SELECT value FROM meta WHERE key = ?').get('dias_configurados');
@@ -305,7 +429,6 @@ route('POST', '/api/config/dias', async (req, res) => {
   sendJson(res, 200, { ok: true, dias_configurados: dias });
 });
 
-// ---------- Gestion de usuarios (solo admin) ----------
 route('GET', '/api/admin/users', async (req, res) => {
   if (!requireAuth(req, res, ['admin'])) return;
   const rows = db.prepare('SELECT id, username, role FROM users ORDER BY role, username').all();
@@ -320,6 +443,7 @@ route('POST', '/api/admin/users', async (req, res) => {
   }
   if (!['admin', 'supervisor', 'vendedor'].includes(role)) {
     return sendJson(res, 400, { error: 'Rol invalido' });
+        return sendJson(res, 400, { error: 'Rol invalido' });
   }
   if (authLib.findUserByUsername(username)) {
     return sendJson(res, 400, { error: 'Ese nombre de usuario ya existe' });
@@ -350,7 +474,6 @@ route('POST', '/api/admin/users/:id/reset-password', async (req, res, params) =>
   sendJson(res, 200, { ok: true });
 });
 
-// ---------- Ranking de marcas y clientes (para la vista online) ----------
 route('GET', '/api/ranking/marcas', async (req, res) => {
   if (!requireAuth(req, res, ['admin', 'supervisor', 'vendedor'])) return;
   const parsed = url.parse(req.url, true);
@@ -375,7 +498,6 @@ route('GET', '/api/ranking/clientes', async (req, res) => {
   const categoria = parsed.query.categoria || '';
   const marca = parsed.query.marca || '';
   if (!mes || !anio || !categoria || !marca) return sendJson(res, 400, { error: 'Faltan parametros mes, anio, categoria y marca' });
-  if (!mes || !anio || !categoria || !marca) return sendJson(res, 400, { error: 'Faltan parametros mes, anio, categoria y marca' });
   const filtros = buildFiltros(parsed.query);
   const rows = db.prepare(`
     SELECT v.cliente_id as cliente_id, c.razon_social as razon_social, c.domicilio as domicilio, SUM(v.um_hl) as hl
@@ -392,7 +514,6 @@ route('GET', '/api/ranking/clientes', async (req, res) => {
   })));
 });
 
-// ---------- Referencia Vendedor-Supervisor ----------
 route('GET', '/api/referencia/supervisores', async (req, res) => {
   if (!requireAuth(req, res, ['admin', 'supervisor', 'vendedor'])) return;
   const row = db.prepare('SELECT value FROM meta WHERE key = ?').get('sup_ref_json');
@@ -408,7 +529,6 @@ route('POST', '/api/referencia/supervisores', async (req, res) => {
   sendJson(res, 200, { ok: true, cantidad: Object.keys(body.mapping).length });
 });
 
-// GET /api/ranking/clientes-categoria?mes=&anio=&categoria=&limit=&supervisor=&camionero=&vendedor=&dia= - top N clientes de TODA la categoria
 route('GET', '/api/ranking/clientes-categoria', async (req, res) => {
   if (!requireAuth(req, res, ['admin', 'supervisor', 'vendedor'])) return;
   const parsed = url.parse(req.url, true);
@@ -433,7 +553,6 @@ route('GET', '/api/ranking/clientes-categoria', async (req, res) => {
   })));
 });
 
-// GET /api/compradores?mes=&anio=&supervisor=&camionero=&vendedor=&dia= - cantidad de clientes distintos que compraron, por categoria
 route('GET', '/api/compradores', async (req, res) => {
   if (!requireAuth(req, res, ['admin', 'supervisor', 'vendedor'])) return;
   const parsed = url.parse(req.url, true);
@@ -473,6 +592,7 @@ function serveStatic(req, res, pathname) {
   fs.readFile(filePath, (err, data) => {
     if (err) {
       fs.readFile(path.join(PUBLIC_DIR, 'index.html'), (err2, data2) => {
+              fs.readFile(path.join(PUBLIC_DIR, 'index.html'), (err2, data2) => {
         if (err2) { res.writeHead(404); res.end('Not found'); return; }
         res.writeHead(200, { 'Content-Type': MIME['.html'] });
         res.end(data2);
