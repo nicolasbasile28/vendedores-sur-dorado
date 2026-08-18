@@ -237,10 +237,19 @@
       <div class="config-row">
         <input type="file" id="fileVentasHoy" accept=".xlsx,.xls" style="background:var(--card2); color:var(--text); border:1px solid var(--border); padding:8px; border-radius:6px;">
         <button onclick="procesarVentasHoy()">Procesar y subir</button>
+            <div class="section" id="uploadJsonSection">
+      <h2>Subir histórico ya procesado (JSON)</h2>
+      <div class="config-row">
+        <input type="file" id="fileHistoricoJson" accept=".json" style="background:var(--card2); color:var(--text); border:1px solid var(--border); padding:8px; border-radius:6px;">
+        <button onclick="procesarHistoricoJson()">Procesar y subir</button>
+      </div>
+      <div id="uploadJsonMsg" class="msg"></div>
+      <p class="note">Usar solo para meses históricos con archivos Excel demasiado grandes para procesar en el navegador. Este archivo ya viene pre-calculado.</p>
+    </div>
       </div>
       <div id="uploadVentasMsg" class="msg"></div>
       <p class="note">El archivo debe tener las columnas: Descripción DIVISION, Descripción MARCA, Cliente, Descripcion Vendedor, Descripcion Supervisor, Impositivo, UM Total, Anulado, Fecha Comprobante, Descripcion Transporte, Descripcion de Articulo. Puede tardar 1-3 minutos en archivos grandes.</p>
-    </div>
+      </div>
 
     <div class="section" id="adminSupRefSection" style="display:none;">
       <h2>Actualizar mapeo Vendedor-Supervisor (solo admin)</h2>
@@ -558,8 +567,43 @@ async function procesarSupRef(){
     showMsg('supRefMsg', 'Error: ' + e.message, false);
   }
 }
+// ---------- Subir historico ya procesado (JSON pre-agregado, para archivos gigantes) ----------
+async function procesarHistoricoJson(){
+  const file = document.getElementById('fileHistoricoJson').files[0];
+  if(!file){ showMsg('uploadJsonMsg', 'Elegí un archivo', false); return; }
+  showMsg('uploadJsonMsg', 'Leyendo archivo...', true);
+  try{
+    const refRes = await fetch(API + '/api/referencia/supervisores', {headers: authHeaders()});
+    const refData = await refRes.json();
+    const supRef = refData.mapping || {};
 
-// ---------- Procesar y subir ventas del día (admin + supervisor) ----------
+    const text = await file.text();
+    const data = JSON.parse(text);
+    const FALLBACK = 'SIN ASIGNAR (no en tabla de referencia)';
+    const ventas = data.ventas.map(v => ({
+      cliente_id: v.cliente_id, categoria: v.categoria, marca: v.marca, articulo: v.articulo,
+      um_hl: v.um_hl,
+      supervisor: v.es_deposito ? 'VENTA DEPOSITO' : (supRef[normName(v.vendedor)] || FALLBACK),
+      camionero: v.camionero,
+      tipo_documento: v.tipo_documento,
+      mes: v.mes, anio: v.anio,
+    }));
+
+    showMsg('uploadJsonMsg', 'Subiendo al servidor...', true);
+    const res = await fetch(API + '/api/upload', {
+      method: 'POST', headers: {'Content-Type':'application/json', ...authHeaders()},
+      body: JSON.stringify({ clientes: [], ventas, mes_actual: data.mes_actual, mes: data.mes, anio: data.anio, dias_venta_reales: data.dias_venta_reales })
+    });
+    const result = await res.json();
+    if(!res.ok){ showMsg('uploadJsonMsg', result.error || 'Error subiendo', false); return; }
+    showMsg('uploadJsonMsg', `Listo. ${data.mes_actual}: ${result.ventas} filas guardadas.`, true);
+    loadKpis();
+  }catch(e){
+    showMsg('uploadJsonMsg', 'Error: ' + e.message, false);
+  }
+}
+
+  // ---------- Procesar y subir ventas del día (admin + supervisor) ----------
 async function procesarVentasHoy(){
   const file = document.getElementById('fileVentasHoy').files[0];
   if(!file){ showMsg('uploadVentasMsg', 'Elegí un archivo', false); return; }
