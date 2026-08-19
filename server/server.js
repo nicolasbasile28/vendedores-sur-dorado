@@ -142,7 +142,6 @@ route('GET', '/api/cliente/:id', async (req, res, params) => {
   for (const cat of CATS) {
     const rows = db.prepare(`
       SELECT marca, SUM(um_hl) as hl FROM ventas
-            SELECT marca, SUM(um_hl) as hl FROM ventas
       WHERE cliente_id = ? AND categoria = ?
       GROUP BY marca HAVING SUM(um_hl) >= 0.001
       ORDER BY hl DESC
@@ -295,7 +294,7 @@ function procesarExcelYGuardar(buffer) {
       else if (typeof fRaw === 'number' && fRaw > 0) dateObj = excelSerialToDate(fRaw);
       else if (typeof fRaw === 'string' && fRaw.trim()) { const p = new Date(fRaw); if (!isNaN(p)) dateObj = p; }
       if (dateObj && !isNaN(dateObj)) {
-                const dstr = dateObj.getFullYear() + '-' + String(dateObj.getMonth() + 1).padStart(2, '0') + '-' + String(dateObj.getDate()).padStart(2, '0');
+        const dstr = dateObj.getFullYear() + '-' + String(dateObj.getMonth() + 1).padStart(2, '0') + '-' + String(dateObj.getDate()).padStart(2, '0');
         fechaSet.add(dstr);
         const mkey = dateObj.getFullYear() + '-' + String(dateObj.getMonth() + 1).padStart(2, '0');
         mesCount[mkey] = (mesCount[mkey] || 0) + 1;
@@ -369,6 +368,11 @@ function tmpPathFor(uploadId) {
   return path.join(TMP_DIR, uploadId + '.bin');
 }
 
+// Jobs de procesamiento en memoria: el archivo puede tardar mas que el timeout
+// del proxy (Render u otro), asi que /finish responde enseguida y el frontend
+// consulta el estado con /status en vez de esperar la respuesta del POST.
+const uploadJobs = new Map();
+
 route('POST', '/api/upload-excel/start', async (req, res) => {
   const session = requireAuth(req, res, ['admin', 'supervisor']);
   if (!session) return;
@@ -398,17 +402,38 @@ route('POST', '/api/upload-excel/finish', async (req, res) => {
   const session = requireAuth(req, res, ['admin', 'supervisor']);
   if (!session) return;
   const parsed = url.parse(req.url, true);
-  const filePath = tmpPathFor(parsed.query.uploadId || '');
+  const uploadId = parsed.query.uploadId || '';
+  const filePath = tmpPathFor(uploadId);
   if (!filePath || !fs.existsSync(filePath)) return sendJson(res, 400, { error: 'uploadId invalido o expirado' });
+
+  uploadJobs.set(uploadId, { status: 'procesando' });
+  // Responder ya: procesarExcelYGuardar puede tardar varios minutos con
+  // archivos grandes y superar el timeout del proxy, que devuelve HTML
+  // en vez de JSON y rompe el .json() del frontend. El procesamiento
+  // sigue despues de esta respuesta y el resultado se consulta por /status.
+  sendJson(res, 202, { ok: true, uploadId, procesando: true });
+
   try {
     const buffer = fs.readFileSync(filePath);
     const resultado = procesarExcelYGuardar(buffer);
-    sendJson(res, 200, resultado);
+    uploadJobs.set(uploadId, { status: 'listo', resultado });
   } catch (e) {
-    sendJson(res, e.status || 500, { error: e.error || e.message || 'Error desconocido' });
+    uploadJobs.set(uploadId, { status: 'error', error: e.error || e.message || 'Error desconocido' });
   } finally {
     try { fs.unlinkSync(filePath); } catch (e) {}
   }
+});
+
+route('GET', '/api/upload-excel/status', async (req, res) => {
+  const session = requireAuth(req, res, ['admin', 'supervisor']);
+  if (!session) return;
+  const parsed = url.parse(req.url, true);
+  const uploadId = parsed.query.uploadId || '';
+  const job = uploadJobs.get(uploadId);
+  if (!job) return sendJson(res, 404, { error: 'uploadId invalido o expirado' });
+  if (job.status === 'error') { uploadJobs.delete(uploadId); return sendJson(res, 500, { error: job.error }); }
+  if (job.status === 'listo') { uploadJobs.delete(uploadId); return sendJson(res, 200, { status: 'listo', ...job.resultado }); }
+  sendJson(res, 200, { status: 'procesando' });
 });
 
 function buildFiltros(query) {
@@ -445,7 +470,7 @@ route('GET', '/api/kpis', async (req, res) => {
   const diasConfigurados = diasConfigRow ? Number(diasConfigRow.value) : null;
   const diasRealesRow = db.prepare('SELECT value FROM meta WHERE key = ?').get(`dias_reales_${anio}_${String(mes).padStart(2, '0')}`);
   const diasReales = diasRealesRow ? Number(diasRealesRow.value) : null;
-    const CATS = ['Cervezas', 'Aguas', 'Vinos', 'Sidras'];
+  const CATS = ['Cervezas', 'Aguas', 'Vinos', 'Sidras'];
   const resultado = {};
   for (const cat of CATS) {
     const actualRow = db.prepare(`SELECT SUM(v.um_hl) as total FROM ventas v ${join} WHERE v.categoria = ? AND v.mes = ? AND v.anio = ?${clause}`).get(cat, mes, anio, ...params);
@@ -580,7 +605,7 @@ route('GET', '/api/referencia/supervisores', async (req, res) => {
   let mapping = {};
   if (row) { try { mapping = JSON.parse(row.value); } catch (e) { mapping = {}; } }
   sendJson(res, 200, { mapping });
-  });
+});
 route('POST', '/api/referencia/supervisores', async (req, res) => {
   if (!requireAuth(req, res, ['admin'])) return;
   const body = JSON.parse((await readBody(req)).toString('utf-8') || '{}');
