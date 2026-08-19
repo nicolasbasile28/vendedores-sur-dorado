@@ -632,10 +632,22 @@ async function procesarVentasHoy(){
     const finishRes = await fetch(API + '/api/upload-excel/finish?uploadId=' + encodeURIComponent(uploadId), {
       method: 'POST', headers: authHeaders()
     });
-    const data = await finishRes.json();
-    if(!finishRes.ok){ showMsg('uploadVentasMsg', data.error || 'Error procesando', false); return; }
-        showMsg('uploadVentasMsg', `Listo. ${data.mes_actual}: ${data.ventas} filas guardadas.`, true);
-    loadKpis();
+    const finishData = await finishRes.json();
+    if(!finishRes.ok){ showMsg('uploadVentasMsg', finishData.error || 'Error procesando', false); return; }
+
+    // El servidor ya respondio y sigue procesando atras: consultamos el
+    // estado hasta que termine en vez de esperar la respuesta original,
+    // que podria tardar mas que el timeout del proxy.
+    while(true){
+      await new Promise(r => setTimeout(r, 3000));
+      const statusRes = await fetch(API + '/api/upload-excel/status?uploadId=' + encodeURIComponent(uploadId), { headers: authHeaders() });
+      const data = await statusRes.json();
+      if(!statusRes.ok){ showMsg('uploadVentasMsg', data.error || 'Error procesando', false); return; }
+      if(data.status === 'procesando') continue;
+      showMsg('uploadVentasMsg', `Listo. ${data.mes_actual}: ${data.ventas} filas guardadas.`, true);
+      loadKpis();
+      return;
+    }
   }catch(e){
     showMsg('uploadVentasMsg', 'Error: ' + e.message, false);
   }
