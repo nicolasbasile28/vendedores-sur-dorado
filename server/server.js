@@ -1,3 +1,4 @@
+
 // server.js - Servidor HTTP principal
 const http = require('http');
 const fs = require('fs');
@@ -142,6 +143,7 @@ route('GET', '/api/cliente/:id', async (req, res, params) => {
   for (const cat of CATS) {
     const rows = db.prepare(`
       SELECT marca, SUM(um_hl) as hl FROM ventas
+            SELECT marca, SUM(um_hl) as hl FROM ventas
       WHERE cliente_id = ? AND categoria = ?
       GROUP BY marca HAVING SUM(um_hl) >= 0.001
       ORDER BY hl DESC
@@ -208,7 +210,7 @@ function guardarVentas({ clientes, ventas, mes_actual, mes, anio, dias_venta_rea
   }
   return { clientes: clientes.length, ventas: ventas.length };
 }
-
+ 
 route('POST', '/api/upload', async (req, res) => {
   const session = requireAuth(req, res, ['admin', 'supervisor']);
   if (!session) return;
@@ -223,7 +225,7 @@ route('POST', '/api/upload', async (req, res) => {
   }
   sendJson(res, 200, { ok: true, clientes: resultado.clientes, ventas: resultado.ventas });
 });
-
+ 
 const CAT_MAP_SERVIDOR = { 'CERVEZA': 'Cervezas', 'AGUA': 'Aguas', 'VINOS': 'Vinos', 'SIDRAS': 'Sidras' };
 const normNameServidor = s => (s || '').toString().toUpperCase().trim().split(/\s+/).sort().join(' ');
 function excelSerialToDate(n) {
@@ -232,14 +234,14 @@ function excelSerialToDate(n) {
 function procesarExcelYGuardar(buffer) {
   let wb;
   try {
-    wb = XLSX.read(buffer, { type: 'buffer', cellDates: true });
+    wb = XLSX.read(buffer, { type: 'buffer', cellDates: true, dense: true });
   } catch (e) {
     throw { status: 400, error: 'No se pudo interpretar el archivo Excel: ' + e.message };
   }
   const ws = wb.Sheets[wb.SheetNames[0]];
   const rows = XLSX.utils.sheet_to_json(ws, { header: 1, raw: true, defval: undefined });
   if (!rows || rows.length < 2) throw { status: 400, error: 'El archivo de ventas está vacío o no se pudo leer.' };
-
+ 
   const header = rows[0];
   function findCol(name) {
     for (let i = 0; i < header.length; i++) { if (header[i] === name) return i; }
@@ -259,17 +261,17 @@ function procesarExcelYGuardar(buffer) {
   const fechaIdx = findCol('Fecha Comprobante');
   const transpIdx = findCol('Descripcion Transporte');
   const articuloIdx = findCol('Descripcion de Articulo');
-
+ 
   const supRefRow = db.prepare('SELECT value FROM meta WHERE key = ?').get('sup_ref_json');
   let supRef = {};
   if (supRefRow) { try { supRef = JSON.parse(supRefRow.value); } catch (e) { supRef = {}; } }
   const FALLBACK = 'SIN ASIGNAR (no en tabla de referencia)';
-
+ 
   const vendAppAgg = new Map();
   const ventaDepositoVend = new Set();
   const fechaSet = new Set();
   const mesCount = {};
-
+ 
   for (let r = 1; r < rows.length; r++) {
     const row = rows[r];
     if (!row) continue;
@@ -286,7 +288,7 @@ function procesarExcelYGuardar(buffer) {
     const transp = (transpIdx >= 0 ? row[transpIdx] : null) || 'SIN TRANSPORTE';
     const supRaw = row[idx.supervisor];
     if (!supRaw || String(supRaw).trim() === '') ventaDepositoVend.add(vendedor);
-
+ 
     if (fechaIdx >= 0) {
       const fRaw = row[fechaIdx];
       let dateObj = null;
@@ -294,20 +296,20 @@ function procesarExcelYGuardar(buffer) {
       else if (typeof fRaw === 'number' && fRaw > 0) dateObj = excelSerialToDate(fRaw);
       else if (typeof fRaw === 'string' && fRaw.trim()) { const p = new Date(fRaw); if (!isNaN(p)) dateObj = p; }
       if (dateObj && !isNaN(dateObj)) {
-        const dstr = dateObj.getFullYear() + '-' + String(dateObj.getMonth() + 1).padStart(2, '0') + '-' + String(dateObj.getDate()).padStart(2, '0');
+                const dstr = dateObj.getFullYear() + '-' + String(dateObj.getMonth() + 1).padStart(2, '0') + '-' + String(dateObj.getDate()).padStart(2, '0');
         fechaSet.add(dstr);
         const mkey = dateObj.getFullYear() + '-' + String(dateObj.getMonth() + 1).padStart(2, '0');
         mesCount[mkey] = (mesCount[mkey] || 0) + 1;
       }
     }
-
+ 
     if (articuloIdx >= 0 && cliente !== undefined && cliente !== null && cliente !== '') {
       const articulo = row[articuloIdx] || 'SIN ARTICULO';
       const vaKey = cliente + '|' + cat + '|' + marca + '|' + articulo + '|' + vendedor + '|' + transp + '|' + fiscal;
       vendAppAgg.set(vaKey, (vendAppAgg.get(vaKey) || 0) + um);
     }
   }
-
+ 
   let mesActual = '', mesNumOut = null, anioNumOut = null;
   const bestMesEntry = Object.entries(mesCount).sort((a, b) => b[1] - a[1])[0];
   if (bestMesEntry) {
@@ -316,7 +318,7 @@ function procesarExcelYGuardar(buffer) {
     mesActual = NOMBRES[m - 1] + ' ' + y;
     mesNumOut = m; anioNumOut = y;
   }
-
+ 
   const ventas = [];
   for (const [vaKey, um] of vendAppAgg.entries()) {
     if (um < 0.001) continue;
@@ -332,7 +334,7 @@ function procesarExcelYGuardar(buffer) {
       mes: mesNumOut, anio: anioNumOut,
     });
   }
-
+ 
   let resultado;
   try {
     resultado = guardarVentas({ clientes: [], ventas, mes_actual: mesActual, mes: mesNumOut, anio: anioNumOut, dias_venta_reales: fechaSet.size });
@@ -341,7 +343,7 @@ function procesarExcelYGuardar(buffer) {
   }
   return { ok: true, mes_actual: mesActual, ventas: resultado.ventas };
 }
-
+ 
 route('POST', '/api/upload-excel', async (req, res) => {
   const session = requireAuth(req, res, ['admin', 'supervisor']);
   if (!session) return;
@@ -358,21 +360,21 @@ route('POST', '/api/upload-excel', async (req, res) => {
     sendJson(res, e.status || 500, { error: e.error || e.message || 'Error desconocido' });
   }
 });
-
+ 
 const DATA_DIR = process.env.DB_PATH ? path.dirname(process.env.DB_PATH) : path.join(__dirname, '..', 'data');
 const TMP_DIR = path.join(DATA_DIR, 'tmp_uploads');
 try { fs.mkdirSync(TMP_DIR, { recursive: true }); } catch (e) {}
-
+ 
 function tmpPathFor(uploadId) {
   if (!/^[a-f0-9]{32}$/.test(uploadId)) return null;
   return path.join(TMP_DIR, uploadId + '.bin');
 }
-
+ 
 // Jobs de procesamiento en memoria: el archivo puede tardar mas que el timeout
 // del proxy (Render u otro), asi que /finish responde enseguida y el frontend
 // consulta el estado con /status en vez de esperar la respuesta del POST.
 const uploadJobs = new Map();
-
+ 
 route('POST', '/api/upload-excel/start', async (req, res) => {
   const session = requireAuth(req, res, ['admin', 'supervisor']);
   if (!session) return;
@@ -381,7 +383,7 @@ route('POST', '/api/upload-excel/start', async (req, res) => {
   fs.writeFileSync(filePath, Buffer.alloc(0));
   sendJson(res, 200, { uploadId });
 });
-
+ 
 route('POST', '/api/upload-excel/chunk', async (req, res) => {
   const session = requireAuth(req, res, ['admin', 'supervisor']);
   if (!session) return;
@@ -397,7 +399,7 @@ route('POST', '/api/upload-excel/chunk', async (req, res) => {
   fs.appendFileSync(filePath, chunk);
   sendJson(res, 200, { ok: true, size: fs.statSync(filePath).size });
 });
-
+ 
 route('POST', '/api/upload-excel/finish', async (req, res) => {
   const session = requireAuth(req, res, ['admin', 'supervisor']);
   if (!session) return;
@@ -405,14 +407,14 @@ route('POST', '/api/upload-excel/finish', async (req, res) => {
   const uploadId = parsed.query.uploadId || '';
   const filePath = tmpPathFor(uploadId);
   if (!filePath || !fs.existsSync(filePath)) return sendJson(res, 400, { error: 'uploadId invalido o expirado' });
-
+ 
   uploadJobs.set(uploadId, { status: 'procesando' });
   // Responder ya: procesarExcelYGuardar puede tardar varios minutos con
   // archivos grandes y superar el timeout del proxy, que devuelve HTML
   // en vez de JSON y rompe el .json() del frontend. El procesamiento
   // sigue despues de esta respuesta y el resultado se consulta por /status.
   sendJson(res, 202, { ok: true, uploadId, procesando: true });
-
+ 
   try {
     const buffer = fs.readFileSync(filePath);
     const resultado = procesarExcelYGuardar(buffer);
@@ -423,7 +425,7 @@ route('POST', '/api/upload-excel/finish', async (req, res) => {
     try { fs.unlinkSync(filePath); } catch (e) {}
   }
 });
-
+ 
 route('GET', '/api/upload-excel/status', async (req, res) => {
   const session = requireAuth(req, res, ['admin', 'supervisor']);
   if (!session) return;
@@ -435,7 +437,7 @@ route('GET', '/api/upload-excel/status', async (req, res) => {
   if (job.status === 'listo') { uploadJobs.delete(uploadId); return sendJson(res, 200, { status: 'listo', ...job.resultado }); }
   sendJson(res, 200, { status: 'procesando' });
 });
-
+ 
 function buildFiltros(query) {
   const filtros = { supervisor: query.supervisor || '', camionero: query.camionero || '', vendedor: query.vendedor || '', dia: query.dia || '' };
   let needsJoin = !!(filtros.vendedor || filtros.dia);
@@ -448,7 +450,7 @@ function buildFiltros(query) {
   const join = needsJoin ? 'LEFT JOIN clientes c ON c.cliente_id = v.cliente_id' : '';
   return { clause, params, join };
 }
-
+ 
 route('GET', '/api/filtros/opciones', async (req, res) => {
   if (!requireAuth(req, res, ['admin', 'supervisor', 'vendedor'])) return;
   const supervisores = db.prepare(`SELECT DISTINCT supervisor FROM ventas WHERE supervisor IS NOT NULL AND supervisor != '' ORDER BY supervisor`).all().map(r => r.supervisor);
@@ -457,7 +459,7 @@ route('GET', '/api/filtros/opciones', async (req, res) => {
   const dias = db.prepare(`SELECT DISTINCT dias_visita FROM clientes WHERE dias_visita IS NOT NULL AND dias_visita != '' ORDER BY dias_visita`).all().map(r => r.dias_visita);
   sendJson(res, 200, { supervisores, camioneros, vendedores, dias });
 });
-
+ 
 route('GET', '/api/kpis', async (req, res) => {
   if (!requireAuth(req, res, ['admin', 'supervisor', 'vendedor'])) return;
   const parsed = url.parse(req.url, true);
@@ -465,12 +467,12 @@ route('GET', '/api/kpis', async (req, res) => {
   const anio = Number(parsed.query.anio);
   if (!mes || !anio) return sendJson(res, 400, { error: 'Faltan parametros mes y anio' });
   const { clause, params, join } = buildFiltros(parsed.query);
-
+ 
   const diasConfigRow = db.prepare('SELECT value FROM meta WHERE key = ?').get('dias_configurados');
   const diasConfigurados = diasConfigRow ? Number(diasConfigRow.value) : null;
   const diasRealesRow = db.prepare('SELECT value FROM meta WHERE key = ?').get(`dias_reales_${anio}_${String(mes).padStart(2, '0')}`);
   const diasReales = diasRealesRow ? Number(diasRealesRow.value) : null;
-  const CATS = ['Cervezas', 'Aguas', 'Vinos', 'Sidras'];
+    const CATS = ['Cervezas', 'Aguas', 'Vinos', 'Sidras'];
   const resultado = {};
   for (const cat of CATS) {
     const actualRow = db.prepare(`SELECT SUM(v.um_hl) as total FROM ventas v ${join} WHERE v.categoria = ? AND v.mes = ? AND v.anio = ?${clause}`).get(cat, mes, anio, ...params);
@@ -500,7 +502,7 @@ route('GET', '/api/meta', async (req, res) => {
   rows.forEach(r => out[r.key] = r.value);
   sendJson(res, 200, out);
 });
-
+ 
 route('GET', '/api/config/dias', async (req, res) => {
   if (!requireAuth(req, res, ['admin', 'supervisor', 'vendedor'])) return;
   const row = db.prepare('SELECT value FROM meta WHERE key = ?').get('dias_configurados');
@@ -514,7 +516,7 @@ route('POST', '/api/config/dias', async (req, res) => {
   db.prepare('INSERT OR REPLACE INTO meta (key, value) VALUES (?,?)').run('dias_configurados', String(dias));
   sendJson(res, 200, { ok: true, dias_configurados: dias });
 });
-
+ 
 route('GET', '/api/admin/users', async (req, res) => {
   if (!requireAuth(req, res, ['admin'])) return;
   const rows = db.prepare('SELECT id, username, role FROM users ORDER BY role, username').all();
@@ -558,7 +560,7 @@ route('POST', '/api/admin/users/:id/reset-password', async (req, res, params) =>
   db.prepare('UPDATE users SET password_hash = ?, salt = ? WHERE id = ?').run(hash, salt, params.id);
   sendJson(res, 200, { ok: true });
 });
-
+ 
 route('GET', '/api/ranking/marcas', async (req, res) => {
   if (!requireAuth(req, res, ['admin', 'supervisor', 'vendedor'])) return;
   const parsed = url.parse(req.url, true);
@@ -598,14 +600,14 @@ route('GET', '/api/ranking/clientes', async (req, res) => {
     hl: Math.round(r.hl * 1000) / 1000,
   })));
 });
-
+ 
 route('GET', '/api/referencia/supervisores', async (req, res) => {
   if (!requireAuth(req, res, ['admin', 'supervisor', 'vendedor'])) return;
   const row = db.prepare('SELECT value FROM meta WHERE key = ?').get('sup_ref_json');
   let mapping = {};
   if (row) { try { mapping = JSON.parse(row.value); } catch (e) { mapping = {}; } }
   sendJson(res, 200, { mapping });
-});
+  });
 route('POST', '/api/referencia/supervisores', async (req, res) => {
   if (!requireAuth(req, res, ['admin'])) return;
   const body = JSON.parse((await readBody(req)).toString('utf-8') || '{}');
@@ -613,7 +615,7 @@ route('POST', '/api/referencia/supervisores', async (req, res) => {
   db.prepare('INSERT OR REPLACE INTO meta (key, value) VALUES (?,?)').run('sup_ref_json', JSON.stringify(body.mapping));
   sendJson(res, 200, { ok: true, cantidad: Object.keys(body.mapping).length });
 });
-
+ 
 route('GET', '/api/ranking/clientes-categoria', async (req, res) => {
   if (!requireAuth(req, res, ['admin', 'supervisor', 'vendedor'])) return;
   const parsed = url.parse(req.url, true);
@@ -637,7 +639,7 @@ route('GET', '/api/ranking/clientes-categoria', async (req, res) => {
     hl: Math.round(r.hl * 1000) / 1000,
   })));
 });
-
+ 
 route('GET', '/api/compradores', async (req, res) => {
   if (!requireAuth(req, res, ['admin', 'supervisor', 'vendedor'])) return;
   const parsed = url.parse(req.url, true);
@@ -661,7 +663,7 @@ route('GET', '/api/compradores', async (req, res) => {
   `).all(mes, anio, ...params);
   sendJson(res, 200, { categorias: resultado, total: totalRows.length });
 });
-
+ 
 const MIME = {
   '.html': 'text/html; charset=utf-8',
   '.js': 'application/javascript; charset=utf-8',
