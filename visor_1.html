@@ -1,0 +1,819 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Sur Dorado - Visor Comercial</title>
+<style>
+  :root{
+    --bordo:#5a2a2a; --bordo2:#7a3a3a; --dorado:#e8c987;
+    --bg:#12141c; --card:#1b1f2e; --card2:#232838;
+    --text:#f2f0ee; --text2:#a9a5b0; --border:#2f3446;
+    --ok:#4caf6a; --bad:#e05a5a;
+  }
+  *{box-sizing:border-box;}
+  body{
+    margin:0; font-family:-apple-system,Segoe UI,Roboto,Arial,sans-serif;
+    background:var(--bg); color:var(--text); min-height:100vh;
+  }
+  .topbar{
+    background:var(--bordo); padding:14px 20px; display:flex;
+    justify-content:space-between; align-items:center; flex-wrap:wrap; gap:10px;
+  }
+  .topbar .brand{font-weight:800; font-size:18px;}
+  .topbar .brand span{color:var(--dorado);}
+  .topbar button{
+    background:transparent; border:1px solid rgba(255,255,255,.4); color:#fff;
+    padding:6px 14px; border-radius:6px; cursor:pointer; font-size:13px;
+  }
+  .wrap{max-width:1100px; margin:0 auto; padding:20px;}
+  .periodo{
+    display:flex; align-items:center; gap:10px; margin-bottom:18px; flex-wrap:wrap;
+    color:var(--text2); font-size:14px;
+  }
+  .periodo input{
+    background:var(--card2); border:1px solid var(--border); color:var(--text);
+    padding:6px 8px; border-radius:6px; width:70px; font-size:14px;
+  }
+  .periodo select{
+    background:var(--card2); border:1px solid var(--border); color:var(--text);
+    padding:6px 8px; border-radius:6px; font-size:14px;
+  }
+  .periodo button{
+    background:var(--bordo); color:#fff; border:none; padding:7px 14px;
+    border-radius:6px; cursor:pointer; font-size:13px;
+  }
+  .kpi-grid{
+    display:grid; grid-template-columns:repeat(auto-fit, minmax(220px,1fr));
+    gap:16px; margin-bottom:24px;
+  }
+  .kpi-card{
+    background:var(--card); border:1px solid var(--border); border-radius:12px;
+    padding:18px;
+  }
+  .kpi-card h3{margin:0 0 12px; font-size:14px; color:var(--dorado); text-transform:uppercase; letter-spacing:.5px;}
+  .kpi-main{font-size:28px; font-weight:800; margin-bottom:4px;}
+  .kpi-sub{font-size:12px; color:var(--text2); margin-bottom:10px;}
+  .kpi-row{display:flex; justify-content:space-between; font-size:13px; padding:4px 0; border-top:1px solid var(--border);}
+  .kpi-row span:first-child{color:var(--text2);}
+  .badge{padding:2px 8px; border-radius:10px; font-size:12px; font-weight:700;}
+  .badge.up{background:rgba(76,175,106,.15); color:var(--ok);}
+  .badge.down{background:rgba(224,90,90,.15); color:var(--bad);}
+  .badge.neutral{background:rgba(169,165,176,.15); color:var(--text2);}
+  .section{
+    background:var(--card); border:1px solid var(--border); border-radius:12px;
+    padding:18px; margin-bottom:20px;
+  }
+  .section h2{margin:0 0 14px; font-size:15px; color:var(--dorado);}
+  .config-row{display:flex; gap:10px; align-items:center; flex-wrap:wrap;}
+  .config-row input{
+    background:var(--card2); border:1px solid var(--border); color:var(--text);
+    padding:8px 10px; border-radius:6px; width:100px; font-size:14px;
+  }
+  .config-row button{
+    background:var(--bordo); color:#fff; border:none; padding:8px 16px;
+    border-radius:6px; cursor:pointer; font-size:13px;
+  }
+  .note{font-size:12px; color:var(--text2); margin-top:8px;}
+  .msg{padding:8px 12px; border-radius:6px; font-size:13px; margin-top:8px; display:none;}
+  .msg.ok{background:rgba(76,175,106,.15); color:var(--ok); display:block;}
+  .msg.err{background:rgba(224,90,90,.15); color:var(--bad); display:block;}
+  #loginScreen{display:flex; align-items:center; justify-content:center; min-height:100vh;}
+  #loginScreen .card{
+    background:var(--card); border:1px solid var(--border); border-radius:12px;
+    padding:28px; width:300px; text-align:center;
+  }
+  #loginScreen h1{font-size:22px; margin:0 0 4px;}
+  #loginScreen h1 span{color:var(--dorado);}
+  #loginScreen .sub{color:var(--text2); font-size:13px; margin-bottom:18px;}
+  #loginScreen input{
+    width:100%; background:var(--card2); border:1px solid var(--border); color:var(--text);
+    padding:10px; border-radius:6px; margin-bottom:10px; font-size:14px;
+  }
+  #loginScreen button{
+    width:100%; background:var(--bordo); color:#fff; border:none; padding:10px;
+    border-radius:6px; cursor:pointer; font-weight:700; font-size:14px; margin-top:6px;
+  }
+  .hidden{display:none !important;}
+  .loading{color:var(--text2); font-size:13px; padding:20px; text-align:center;}
+</style>
+</head>
+<body>
+
+<div id="loginScreen">
+  <div class="card">
+    <h1>SUR <span>DORADO</span></h1>
+    <div class="sub">Visor Comercial</div>
+    <div id="loginMsg" class="msg err"></div>
+    <input id="loginUser" type="text" placeholder="Usuario">
+    <input id="loginPass" type="password" placeholder="Contraseña">
+    <button onclick="doLogin()">Ingresar</button>
+  </div>
+</div>
+
+<div id="mainScreen" class="hidden">
+  <div class="topbar">
+    <div class="brand">SUR <span>DORADO</span> · Visor Comercial</div>
+    <div>
+      <button id="tabBtnPanel" onclick="showTab('panel')" style="background:rgba(255,255,255,.15); margin-right:6px;">Panel</button>
+      <button id="tabBtnConfig" onclick="showTab('config')" style="margin-right:14px;">Configuración</button>
+      <span id="userLabel" style="margin-right:14px; font-size:13px; color:#ddd;"></span>
+      <button onclick="doLogout()">Salir</button>
+    </div>
+  </div>
+  <div class="wrap">
+      <div id="tabPanel">
+
+    <div class="periodo">
+      <span>Periodo:</span>
+      <select id="mesInput">
+        <option value="1">Enero</option>
+        <option value="2">Febrero</option>
+        <option value="3">Marzo</option>
+        <option value="4">Abril</option>
+        <option value="5">Mayo</option>
+        <option value="6">Junio</option>
+        <option value="7">Julio</option>
+        <option value="8">Agosto</option>
+        <option value="9">Septiembre</option>
+        <option value="10">Octubre</option>
+        <option value="11">Noviembre</option>
+        <option value="12">Diciembre</option>
+      </select>
+      <input id="anioInput" type="number" placeholder="Año" style="width:70px;">
+      <button onclick="loadKpis()">Ver</button>
+      <span id="periodoNote" style="font-size:12px;"></span>
+    </div>
+
+    <div class="periodo" id="filtrosArea">
+      <span>Filtros:</span>
+      <select id="filtroSupervisor" onchange="loadKpis()"><option value="">Supervisor (todos)</option></select>
+      <select id="filtroVendedor" onchange="loadKpis()"><option value="">Vendedor (todos)</option></select>
+      <select id="filtroDia" onchange="loadKpis()"><option value="">Día (todos)</option></select>
+      <select id="filtroCamionero" onchange="loadKpis()"><option value="">Camionero (todos)</option></select>
+      <button onclick="limpiarFiltros()" style="background:transparent; border:1px solid var(--border); color:var(--text2);">Limpiar</button>
+    </div>
+
+    <div id="kpiArea">
+      <div class="loading">Cargando datos...</div>
+    </div>
+
+    <div class="section" id="compradoresSection">
+      <h2>Compradores por categoría</h2>
+      <div id="compradoresArea"><div class="loading">Cargando...</div></div>
+    </div>
+
+    <div class="section">
+      <h2>Ranking de marcas</h2>
+      <div class="config-row" style="margin-bottom:14px;">
+        <label>Categoría:</label>
+        <select id="catRankingSelect" onchange="loadRankingMarcas()">
+          <option value="Cervezas">Cervezas</option>
+          <option value="Aguas">Aguas</option>
+          <option value="Vinos">Vinos</option>
+          <option value="Sidras">Sidras</option>
+        </select>
+      </div>
+      <div id="rankingArea"><div class="loading">Elegí "Ver" arriba para cargar el ranking.</div></div>
+    </div>
+
+    <div class="section" id="drillDownSection" style="display:none;">
+      <h2 id="drillDownTitle">Top clientes</h2>
+      <button onclick="exportarClientesExcel()" style="background:var(--bordo); color:#fff; border:none; padding:7px 14px; border-radius:6px; cursor:pointer; font-size:13px; margin-bottom:12px;">Exportar a Excel</button>
+      <div style="overflow-x:auto;">
+        <table style="width:100%; border-collapse:collapse; font-size:13px;">
+          <thead>
+            <tr style="text-align:left; color:var(--text2); border-bottom:1px solid var(--border);">
+              <th style="padding:6px;">Código</th>
+              <th style="padding:6px;">Razón social</th>
+              <th style="padding:6px;">Domicilio</th>
+              <th style="padding:6px; text-align:right;">HL</th>
+            </tr>
+          </thead>
+          <tbody id="drillDownBody"></tbody>
+        </table>
+      </div>
+    </div>
+
+    <div class="section">
+      <h2>Top clientes por categoría (todas las marcas)</h2>
+      <div class="config-row" style="margin-bottom:14px;">
+        <label>Categoría:</label>
+        <select id="catTopClientesSelect" onchange="loadTopClientesCategoria()">
+          <option value="Cervezas">Cervezas</option>
+          <option value="Aguas">Aguas</option>
+          <option value="Vinos">Vinos</option>
+          <option value="Sidras">Sidras</option>
+        </select>
+        <label>Cantidad:</label>
+        <select id="limitTopClientesSelect" onchange="loadTopClientesCategoria()">
+          <option value="15">Top 15</option>
+          <option value="20" selected>Top 20</option>
+        </select>
+      </div>
+      <button onclick="exportarTopClientesExcel()" style="background:var(--bordo); color:#fff; border:none; padding:7px 14px; border-radius:6px; cursor:pointer; font-size:13px; margin-bottom:12px;">Exportar a Excel</button>
+      <div style="overflow-x:auto;">
+        <table style="width:100%; border-collapse:collapse; font-size:13px;">
+          <thead>
+            <tr style="text-align:left; color:var(--text2); border-bottom:1px solid var(--border);">
+              <th style="padding:6px;">Código</th>
+              <th style="padding:6px;">Razón social</th>
+              <th style="padding:6px;">Domicilio</th>
+              <th style="padding:6px; text-align:right;">HL</th>
+            </tr>
+          </thead>
+          <tbody id="topClientesBody"><tr><td colspan="4" style="padding:10px;">Elegí "Ver" arriba para cargar.</td></tr></tbody>
+        </table>
+      </div>
+    </div>
+
+  </div>
+
+  <div id="tabConfig" class="hidden">
+
+    <div class="section" id="uploadJsonSection">
+      <h2>Subir histórico ya procesado (JSON)</h2>
+      <div class="config-row">
+        <input type="file" id="fileHistoricoJson" accept=".json" style="background:var(--card2); color:var(--text); border:1px solid var(--border); padding:8px; border-radius:6px;">
+        <button onclick="procesarHistoricoJson()">Procesar y subir</button>
+      </div>
+      <div id="uploadJsonMsg" class="msg"></div>
+      <p class="note">Usar solo para meses históricos con archivos Excel demasiado grandes para procesar en el navegador. Este archivo ya viene pre-calculado.</p>
+    </div>
+        <div class="section" id="uploadVentasSection">
+      <h2>Actualizar archivo de ventas del día</h2>
+      <div class="config-row">
+        <input type="file" id="fileVentasHoy" accept=".xlsx,.xls" style="background:var(--card2); color:var(--text); border:1px solid var(--border); padding:8px; border-radius:6px;">
+        <button onclick="procesarVentasHoy()">Procesar y subir</button>
+      </div>
+      <div id="uploadVentasMsg" class="msg"></div>
+      <p class="note">El archivo debe tener las columnas: Descripción DIVISION, Descripción MARCA, Cliente, Descripcion Vendedor, Descripcion Supervisor, Impositivo, UM Total, Anulado, Fecha Comprobante, Descripcion Transporte, Descripcion de Articulo. Se procesa directo en el servidor, admite archivos grandes.</p>
+    </div>
+
+    <div class="section" id="adminSupRefSection" style="display:none;">
+      <h2>Actualizar mapeo Vendedor-Supervisor (solo admin)</h2>
+      <div class="config-row">
+        <input type="file" id="fileSupRef" accept=".xlsx,.xls" style="background:var(--card2); color:var(--text); border:1px solid var(--border); padding:8px; border-radius:6px;">
+        <button onclick="procesarSupRef()">Actualizar</button>
+      </div>
+      <div id="supRefMsg" class="msg"></div>
+      <p class="note">El archivo debe tener las columnas VENDEDOR y SUPERVISOR. Esto se usa para asignarle el supervisor correcto a cada venta cuando se sube el archivo de ventas del día.</p>
+    </div>
+
+    <div class="section" id="adminConfigSection" style="display:none;">
+      <h2>Configuración (solo admin)</h2>
+      <div class="config-row">
+        <label>Días de venta configurados (objetivo del mes):</label>
+        <input id="diasConfigInput" type="number" min="1" max="31">
+        <button onclick="saveDiasConfig()">Guardar</button>
+      </div>
+      <div id="diasConfigMsg" class="msg"></div>
+      <p class="note">Este número se usa para calcular la venta proyectada de todas las categorías. Se guarda una sola vez y queda disponible para todos.</p>
+    </div>
+
+  </div>
+
+  </div>
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+<script>
+const API = ''; // mismo origen (se sirve desde el mismo sitio)
+let TOKEN = null, ROLE = null, USERNAME = null;
+
+function showMsg(elId, text, ok){
+  const el = document.getElementById(elId);
+  el.textContent = text;
+  el.className = 'msg ' + (ok ? 'ok' : 'err');
+}
+
+async function doLogin(){
+  const username = document.getElementById('loginUser').value.trim();
+  const password = document.getElementById('loginPass').value;
+  if(!username || !password){ showMsg('loginMsg', 'Completa usuario y contraseña', false); return; }
+  try{
+    const res = await fetch(API + '/api/login', {
+      method: 'POST', headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({username, password})
+    });
+    const data = await res.json();
+    if(!res.ok){ showMsg('loginMsg', data.error || 'Error de login', false); return; }
+    if(!['admin','supervisor'].includes(data.role)){
+      showMsg('loginMsg', 'Este usuario no tiene acceso al visor comercial', false); return;
+    }
+    TOKEN = data.token; ROLE = data.role; USERNAME = data.username;
+    document.getElementById('loginScreen').classList.add('hidden');
+    document.getElementById('mainScreen').classList.remove('hidden');
+    document.getElementById('userLabel').textContent = USERNAME + ' (' + ROLE + ')';
+    if(ROLE === 'admin'){
+      document.getElementById('adminConfigSection').style.display = 'block';
+      document.getElementById('adminSupRefSection').style.display = 'block';
+    }
+    await initPeriodoYKpis();
+    loadFiltrosOpciones();
+    if(ROLE === 'admin') loadDiasConfig();
+  }catch(e){
+    showMsg('loginMsg', 'No se pudo conectar al servidor: ' + e.message, false);
+  }
+}
+
+function showTab(tab){
+  document.getElementById('tabPanel').classList.toggle('hidden', tab !== 'panel');
+  document.getElementById('tabConfig').classList.toggle('hidden', tab !== 'config');
+  document.getElementById('tabBtnPanel').style.background = tab === 'panel' ? 'rgba(255,255,255,.15)' : 'transparent';
+  document.getElementById('tabBtnConfig').style.background = tab === 'config' ? 'rgba(255,255,255,.15)' : 'transparent';
+}
+
+function doLogout(){
+  TOKEN = null; ROLE = null;
+  document.getElementById('mainScreen').classList.add('hidden');
+  document.getElementById('loginScreen').classList.remove('hidden');
+  document.getElementById('loginPass').value = '';
+}
+
+function authHeaders(){
+  return {'Authorization': 'Bearer ' + TOKEN};
+}
+
+async function initPeriodoYKpis(){
+  try{
+    const res = await fetch(API + '/api/meta', {headers: authHeaders()});
+    const meta = await res.json();
+    const mesNum = Number(meta.mes_actual_num) || (new Date().getMonth()+1);
+    const anioNum = Number(meta.anio_actual_num) || new Date().getFullYear();
+    document.getElementById('mesInput').value = mesNum;
+    document.getElementById('anioInput').value = anioNum;
+    document.getElementById('periodoNote').textContent = meta.mes_actual ? ('Último dato cargado: ' + meta.mes_actual) : '';
+    await loadKpis();
+  }catch(e){
+    document.getElementById('kpiArea').innerHTML = '<div class="loading">Error cargando periodo: ' + e.message + '</div>';
+  }
+}
+
+const NOMBRES_MES = ['','Enero','Febrero','Marzo','Abril','Mayo','Junio','Julio','Agosto','Septiembre','Octubre','Noviembre','Diciembre'];
+
+async function loadKpis(){
+  const mes = Number(document.getElementById('mesInput').value);
+  const anio = Number(document.getElementById('anioInput').value);
+  if(!mes || !anio){ return; }
+  CURRENT_MES = mes; CURRENT_ANIO = anio;
+  document.getElementById('kpiArea').innerHTML = '<div class="loading">Cargando datos...</div>';
+  try{
+    const res = await fetch(API + `/api/kpis?mes=${mes}&anio=${anio}${filtrosQueryString()}`, {headers: authHeaders()});
+    const data = await res.json();
+    if(!res.ok){ document.getElementById('kpiArea').innerHTML = '<div class="loading">' + (data.error||'Error') + '</div>'; return; }
+    renderKpis(data);
+    loadRankingMarcas();
+    loadCompradores();
+    loadTopClientesCategoria();
+  }catch(e){
+    document.getElementById('kpiArea').innerHTML = '<div class="loading">Error: ' + e.message + '</div>';
+  }
+}
+
+function fmtHL(n){
+  if(n === null || n === undefined) return '-';
+  return n.toLocaleString('es-AR', {minimumFractionDigits:2, maximumFractionDigits:2}) + ' HL';
+}
+
+function renderKpis(data){
+  const area = document.getElementById('kpiArea');
+  const cats = ['Cervezas','Aguas','Vinos','Sidras'];
+  let html = '<div class="kpi-grid">';
+  for(const cat of cats){
+    const k = data.categorias[cat] || {};
+    const varPct = k.variacion_pct;
+    let badgeClass = 'neutral', badgeText = 'Sin dato año anterior';
+    if(varPct !== null && varPct !== undefined){
+      badgeClass = varPct >= 0 ? 'up' : 'down';
+      badgeText = (varPct >= 0 ? '+' : '') + varPct + '% vs ' + (data.anio-1);
+    }
+    html += `
+      <div class="kpi-card">
+        <h3>${cat}</h3>
+        <div class="kpi-main">${fmtHL(k.actual)}</div>
+        <div class="kpi-sub">Acumulado ${NOMBRES_MES[data.mes]} ${data.anio}</div>
+        <div class="kpi-row"><span>Proyectado</span><span>${k.proyectado !== null ? fmtHL(k.proyectado) : 'Cargar dias configurados'}</span></div>
+        <div class="kpi-row"><span>${NOMBRES_MES[data.mes]} ${data.anio-1}</span><span>${fmtHL(k.anio_anterior)}</span></div>
+        <div class="kpi-row"><span>Variación</span><span class="badge ${badgeClass}">${badgeText}</span></div>
+                <div class="kpi-row"><span>Variación</span><span class="badge ${badgeClass}">${badgeText}</span></div>
+      </div>
+    `;
+  }
+  html += '</div>';
+  html += `<p class="note">Días de venta transcurridos: ${data.dias_venta_reales ?? '-'} · Días configurados: ${data.dias_configurados ?? '-'}</p>`;
+  area.innerHTML = html;
+}
+
+let CURRENT_MES = null, CURRENT_ANIO = null, CURRENT_DRILLDOWN = [];
+
+async function loadRankingMarcas(){
+  if(!CURRENT_MES || !CURRENT_ANIO) return;
+  const categoria = document.getElementById('catRankingSelect').value;
+  const area = document.getElementById('rankingArea');
+  area.innerHTML = '<div class="loading">Cargando ranking...</div>';
+  document.getElementById('drillDownSection').style.display = 'none';
+  try{
+    const res = await fetch(API + `/api/ranking/marcas?mes=${CURRENT_MES}&anio=${CURRENT_ANIO}&categoria=${encodeURIComponent(categoria)}${filtrosQueryString()}`, {headers: authHeaders()});
+    const rows = await res.json();
+    if(!res.ok){ area.innerHTML = '<div class="loading">' + (rows.error||'Error') + '</div>'; return; }
+    if(!rows.length){ area.innerHTML = '<div class="loading">Sin datos para esta categoría en este período.</div>'; return; }
+    const max = rows[0].hl;
+    let html = '';
+    for(const r of rows){
+      const pct = max > 0 ? (r.hl / max * 100) : 0;
+      html += `
+        <div style="margin-bottom:10px; cursor:pointer;" onclick="loadDrillDown('${categoria}', '${r.marca.replace(/'/g,"\\'")}')">
+          <div style="display:flex; justify-content:space-between; font-size:13px; margin-bottom:3px;">
+            <span>${r.marca}</span><span style="color:var(--text2);">${fmtHL(r.hl)}</span>
+          </div>
+          <div style="background:var(--card2); border-radius:4px; height:10px; overflow:hidden;">
+            <div style="background:var(--dorado); height:100%; width:${pct}%;"></div>
+          </div>
+        </div>
+      `;
+    }
+    html += '<p class="note">Hacé clic en una marca para ver el top 15 de clientes.</p>';
+    area.innerHTML = html;
+  }catch(e){
+    area.innerHTML = '<div class="loading">Error: ' + e.message + '</div>';
+  }
+}
+
+async function loadDrillDown(categoria, marca){
+  const section = document.getElementById('drillDownSection');
+  const body = document.getElementById('drillDownBody');
+  document.getElementById('drillDownTitle').textContent = `Top clientes - ${marca} (${categoria})`;
+  section.style.display = 'block';
+  body.innerHTML = '<tr><td colspan="4" style="padding:10px;">Cargando...</td></tr>';
+  try{
+    const res = await fetch(API + `/api/ranking/clientes?mes=${CURRENT_MES}&anio=${CURRENT_ANIO}&categoria=${encodeURIComponent(categoria)}&marca=${encodeURIComponent(marca)}${filtrosQueryString()}`, {headers: authHeaders()});
+    const rows = await res.json();
+    if(!res.ok){ body.innerHTML = '<tr><td colspan="4">' + (rows.error||'Error') + '</td></tr>'; return; }
+    CURRENT_DRILLDOWN = rows;
+    body.innerHTML = rows.map(r => `
+      <tr style="border-bottom:1px solid var(--border);">
+        <td style="padding:6px;">${r.cliente_id}</td>
+        <td style="padding:6px;">${r.razon_social}</td>
+        <td style="padding:6px;">${r.domicilio}</td>
+        <td style="padding:6px; text-align:right;">${fmtHL(r.hl)}</td>
+      </tr>
+    `).join('');
+    section.scrollIntoView({behavior:'smooth', block:'nearest'});
+  }catch(e){
+    body.innerHTML = '<tr><td colspan="4">Error: ' + e.message + '</td></tr>';
+  }
+}
+
+function exportarClientesExcel(){
+  if(!CURRENT_DRILLDOWN.length){ alert('No hay datos para exportar.'); return; }
+  const data = CURRENT_DRILLDOWN.map(r => ({
+    'Código': r.cliente_id, 'Razón social': r.razon_social, 'Domicilio': r.domicilio, 'HL': r.hl,
+  }));
+  const ws = XLSX.utils.json_to_sheet(data);
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, 'Clientes');
+  XLSX.writeFile(wb, 'ranking_clientes.xlsx');
+}
+
+async function loadFiltrosOpciones(){
+  try{
+    const res = await fetch(API + '/api/filtros/opciones', {headers: authHeaders()});
+    const data = await res.json();
+    if(!res.ok) return;
+    fillSelect('filtroSupervisor', data.supervisores, 'Supervisor (todos)');
+    fillSelect('filtroVendedor', data.vendedores, 'Vendedor (todos)');
+    fillSelect('filtroDia', data.dias, 'Día (todos)');
+    fillSelect('filtroCamionero', data.camioneros, 'Camionero (todos)');
+  }catch(e){}
+}
+
+function fillSelect(id, values, placeholder){
+  const sel = document.getElementById(id);
+  const current = sel.value;
+  sel.innerHTML = `<option value="">${placeholder}</option>` + values.map(v => `<option value="${v.replace(/"/g,'&quot;')}">${v}</option>`).join('');
+  sel.value = current;
+}
+
+function limpiarFiltros(){
+  ['filtroSupervisor','filtroVendedor','filtroDia','filtroCamionero'].forEach(id => document.getElementById(id).value = '');
+  loadKpis();
+}
+
+function filtrosQueryString(){
+  const supervisor = document.getElementById('filtroSupervisor').value;
+  const vendedor = document.getElementById('filtroVendedor').value;
+  const dia = document.getElementById('filtroDia').value;
+  const camionero = document.getElementById('filtroCamionero').value;
+  let qs = '';
+  if(supervisor) qs += '&supervisor=' + encodeURIComponent(supervisor);
+  if(vendedor) qs += '&vendedor=' + encodeURIComponent(vendedor);
+  if(dia) qs += '&dia=' + encodeURIComponent(dia);
+  if(camionero) qs += '&camionero=' + encodeURIComponent(camionero);
+  return qs;
+}
+
+const CAT_MAP = {'CERVEZA':'Cervezas','AGUA':'Aguas','VINOS':'Vinos','SIDRAS':'Sidras'};
+const normName = s => (s||'').toString().toUpperCase().trim().split(/\s+/).sort().join(' ');
+function readWorkbook(file){
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = e => {
+      try{ resolve(XLSX.read(e.target.result, {type:'array', cellDates:true, dense:true})); }
+      catch(err){ reject(err); }
+    };
+    reader.onerror = () => reject(new Error('No se pudo leer el archivo'));
+    reader.readAsArrayBuffer(file);
+  });
+}
+function excelSerialToDate(n){
+  return new Date(Math.round((n - 25569) * 86400 * 1000));
+}
+function getDenseRows(ws){
+  const rows = XLSX.utils.sheet_to_json(ws, {header:1, raw:true, defval: undefined});
+  if(!Array.isArray(rows)) throw new Error('No se pudo interpretar el contenido de la hoja.');
+  return rows;
+}
+function findColIndex(headerRow, name){
+  if(!Array.isArray(headerRow)) throw new Error('No se encontró la fila de encabezados (fila 1) en el archivo.');
+  for(let i=0;i<headerRow.length;i++){ if(headerRow[i] === name) return i; }
+  return -1;
+}
+async function procesarSupRef(){
+  const file = document.getElementById('fileSupRef').files[0];
+  if(!file){ showMsg('supRefMsg', 'Elegí un archivo', false); return; }
+  showMsg('supRefMsg', 'Leyendo archivo...', true);
+  try{
+    const wb = await readWorkbook(file);
+    const ws = wb.Sheets[wb.SheetNames[0]];
+    const rows = getDenseRows(ws);
+    if(!rows || rows.length < 2) throw new Error('El archivo está vacío o no se pudo leer.');
+    const header = rows[0];
+    const vIdx = findColIndex(header, 'VENDEDOR');
+    const sIdx = findColIndex(header, 'SUPERVISOR');
+    if(vIdx < 0 || sIdx < 0) throw new Error('Faltan las columnas VENDEDOR / SUPERVISOR');
+    const mapping = {};
+    for(let r=1;r<rows.length;r++){
+      const row = rows[r];
+      if(!row || !row[vIdx]) continue;
+      mapping[normName(row[vIdx])] = (row[sIdx]||'SIN SUPERVISOR').toString().trim();
+    }
+    const res = await fetch(API + '/api/referencia/supervisores', {
+      method: 'POST', headers: {'Content-Type':'application/json', ...authHeaders()},
+      body: JSON.stringify({mapping})
+    });
+    const data = await res.json();
+    if(!res.ok){ showMsg('supRefMsg', data.error || 'Error', false); return; }
+    showMsg('supRefMsg', `Mapeo actualizado: ${data.cantidad} vendedores`, true);
+  }catch(e){
+    showMsg('supRefMsg', 'Error: ' + e.message, false);
+  }
+}
+
+async function procesarHistoricoJson(){
+  const file = document.getElementById('fileHistoricoJson').files[0];
+  if(!file){ showMsg('uploadJsonMsg', 'Elegí un archivo', false); return; }
+  showMsg('uploadJsonMsg', 'Leyendo archivo...', true);
+  try{
+    const refRes = await fetch(API + '/api/referencia/supervisores', {headers: authHeaders()});
+    const refData = await refRes.json();
+    const supRef = refData.mapping || {};
+
+    const text = await file.text();
+    const data = JSON.parse(text);
+    const FALLBACK = 'SIN ASIGNAR (no en tabla de referencia)';
+    const ventas = data.ventas.map(v => ({
+      cliente_id: v.cliente_id, categoria: v.categoria, marca: v.marca, articulo: v.articulo,
+      um_hl: v.um_hl,
+      supervisor: v.es_deposito ? 'VENTA DEPOSITO' : (supRef[normName(v.vendedor)] || FALLBACK),
+      camionero: v.camionero,
+      tipo_documento: v.tipo_documento,
+      mes: v.mes, anio: v.anio,
+    }));
+
+    showMsg('uploadJsonMsg', 'Subiendo al servidor...', true);
+    const res = await fetch(API + '/api/upload', {
+      method: 'POST', headers: {'Content-Type':'application/json', ...authHeaders()},
+      body: JSON.stringify({ clientes: [], ventas, mes_actual: data.mes_actual, mes: data.mes, anio: data.anio, dias_venta_reales: data.dias_venta_reales })
+    });
+    const result = await res.json();
+    if(!res.ok){ showMsg('uploadJsonMsg', result.error || 'Error subiendo', false); return; }
+    showMsg('uploadJsonMsg', `Listo. ${data.mes_actual}: ${result.ventas} filas guardadas.`, true);
+    loadKpis();
+  }catch(e){
+    showMsg('uploadJsonMsg', 'Error: ' + e.message, false);
+  }
+}
+
+const CAT_MAP_VENTAS_HOY = {'CERVEZA':'Cervezas','AGUA':'Aguas','VINOS':'Vinos','SIDRAS':'Sidras'};
+// Se procesa en el navegador (no en el servidor) porque el servidor tiene
+// memoria limitada (512MB) y un Excel grande lo hace quedarse sin memoria
+// y crashear. La compu del usuario tiene mucha mas RAM disponible.
+async function procesarVentasHoy(){
+  const file = document.getElementById('fileVentasHoy').files[0];
+  if(!file){ showMsg('uploadVentasMsg', 'Elegí un archivo', false); return; }
+  try{
+    showMsg('uploadVentasMsg', 'Leyendo el archivo en tu navegador (puede tardar unos segundos, no cierres la pestaña)...', true);
+    const refRes = await fetch(API + '/api/referencia/supervisores', {headers: authHeaders()});
+    const refData = await refRes.json();
+    const supRef = refData.mapping || {};
+
+    const wb = await readWorkbook(file);
+    const ws = wb.Sheets[wb.SheetNames[0]];
+    const rows = getDenseRows(ws);
+    if(!rows || rows.length < 2) throw new Error('El archivo de ventas está vacío o no se pudo leer.');
+
+    const header = rows[0];
+    const idx = {
+      division: findColIndex(header, 'Descripción DIVISION'),
+      marca: findColIndex(header, 'Descripción MARCA'),
+      cliente: findColIndex(header, 'Cliente'),
+      vendedor: findColIndex(header, 'Descripcion Vendedor'),
+      supervisor: findColIndex(header, 'Descripcion Supervisor'),
+      impositivo: findColIndex(header, 'Impositivo'),
+      um: findColIndex(header, 'UM Total'),
+      anulado: findColIndex(header, 'Anulado'),
+    };
+    for(const k in idx){ if(idx[k] < 0) throw new Error('Falta la columna requerida: ' + k); }
+    const fechaIdx = findColIndex(header, 'Fecha Comprobante');
+    const transpIdx = findColIndex(header, 'Descripcion Transporte');
+    const articuloIdx = findColIndex(header, 'Descripcion de Articulo');
+
+    const FALLBACK = 'SIN ASIGNAR (no en tabla de referencia)';
+    const vendAppAgg = new Map();
+    const ventaDepositoVend = new Set();
+    const fechaSet = new Set();
+    const mesCount = {};
+
+    for(let r = 1; r < rows.length; r++){
+      const row = rows[r];
+      if(!row) continue;
+      const division = row[idx.division];
+      const cat = CAT_MAP_VENTAS_HOY[division];
+      if(!cat) continue;
+      const anulado = row[idx.anulado];
+      if(anulado && anulado !== 'NO') continue;
+      const cliente = row[idx.cliente];
+      const vendedor = row[idx.vendedor] || 'SIN VENDEDOR';
+      const marca = row[idx.marca] || 'SIN MARCA';
+      const um = row[idx.um] || 0;
+      const fiscal = row[idx.impositivo] === 'SI' ? 1 : 0;
+      const transp = (transpIdx >= 0 ? row[transpIdx] : null) || 'SIN TRANSPORTE';
+      const supRaw = row[idx.supervisor];
+      if(!supRaw || String(supRaw).trim() === '') ventaDepositoVend.add(vendedor);
+
+      if(fechaIdx >= 0){
+        const fRaw = row[fechaIdx];
+        let dateObj = null;
+        if(fRaw instanceof Date && !isNaN(fRaw)) dateObj = fRaw;
+        else if(typeof fRaw === 'number' && fRaw > 0) dateObj = excelSerialToDate(fRaw);
+        else if(typeof fRaw === 'string' && fRaw.trim()){ const p = new Date(fRaw); if(!isNaN(p)) dateObj = p; }
+        if(dateObj && !isNaN(dateObj)){
+          const dstr = dateObj.getFullYear() + '-' + String(dateObj.getMonth()+1).padStart(2,'0') + '-' + String(dateObj.getDate()).padStart(2,'0');
+          fechaSet.add(dstr);
+          const mkey = dateObj.getFullYear() + '-' + String(dateObj.getMonth()+1).padStart(2,'0');
+          mesCount[mkey] = (mesCount[mkey] || 0) + 1;
+        }
+      }
+
+      if(articuloIdx >= 0 && cliente !== undefined && cliente !== null && cliente !== ''){
+        const articulo = row[articuloIdx] || 'SIN ARTICULO';
+        const vaKey = cliente + '|' + cat + '|' + marca + '|' + articulo + '|' + vendedor + '|' + transp + '|' + fiscal;
+        vendAppAgg.set(vaKey, (vendAppAgg.get(vaKey) || 0) + um);
+      }
+    }
+
+    let mesActual = '', mesNumOut = null, anioNumOut = null;
+    const bestMesEntry = Object.entries(mesCount).sort((a,b) => b[1]-a[1])[0];
+    if(bestMesEntry){
+      const [y, m] = bestMesEntry[0].split('-').map(Number);
+      mesActual = NOMBRES_MES[m] + ' ' + y;
+      mesNumOut = m; anioNumOut = y;
+    }
+
+    const ventas = [];
+    for(const [vaKey, um] of vendAppAgg.entries()){
+      if(um < 0.001) continue;
+      const [cliente_id, categoria, marca, articulo, vendedor, camionero, fiscalStr] = vaKey.split('|');
+      let supervisor;
+      if(ventaDepositoVend.has(vendedor)) supervisor = 'VENTA DEPOSITO';
+      else supervisor = supRef[normName(vendedor)] || FALLBACK;
+      ventas.push({
+        cliente_id, categoria, marca, articulo,
+        um_hl: Math.round(um * 1000) / 1000,
+        supervisor, camionero,
+        tipo_documento: fiscalStr === '1' ? 'FISCAL' : 'NO FISCAL',
+        mes: mesNumOut, anio: anioNumOut,
+      });
+    }
+
+    showMsg('uploadVentasMsg', `Procesado (${ventas.length} filas). Subiendo al servidor...`, true);
+    const res = await fetch(API + '/api/upload', {
+      method: 'POST', headers: {'Content-Type':'application/json', ...authHeaders()},
+      body: JSON.stringify({ clientes: [], ventas, mes_actual: mesActual, mes: mesNumOut, anio: anioNumOut, dias_venta_reales: fechaSet.size })
+    });
+    const data = await res.json();
+    if(!res.ok){ showMsg('uploadVentasMsg', data.error || 'Error subiendo', false); return; }
+    showMsg('uploadVentasMsg', `Listo. ${mesActual}: ${data.ventas} filas guardadas.`, true);
+    loadKpis();
+  }catch(e){
+    showMsg('uploadVentasMsg', 'Error: ' + e.message, false);
+  }
+}
+
+async function loadCompradores(){
+  if(!CURRENT_MES || !CURRENT_ANIO) return;
+  const area = document.getElementById('compradoresArea');
+  area.innerHTML = '<div class="loading">Cargando...</div>';
+  try{
+    const res = await fetch(API + `/api/compradores?mes=${CURRENT_MES}&anio=${CURRENT_ANIO}${filtrosQueryString()}`, {headers: authHeaders()});
+    const data = await res.json();
+    if(!res.ok){ area.innerHTML = '<div class="loading">' + (data.error||'Error') + '</div>'; return; }
+    const cats = ['Cervezas','Aguas','Vinos','Sidras'];
+        const max = Math.max(data.total, 1);
+    let html = '';
+    for(const cat of cats){
+      const n = data.categorias[cat] || 0;
+      const pct = max > 0 ? (n / max * 100) : 0;
+      html += `
+        <div style="margin-bottom:10px;">
+          <div style="display:flex; justify-content:space-between; font-size:13px; margin-bottom:3px;">
+            <span>${cat}</span><span style="color:var(--text2);">${n} clientes</span>
+          </div>
+          <div style="background:var(--card2); border-radius:4px; height:10px; overflow:hidden;">
+            <div style="background:var(--dorado); height:100%; width:${pct}%;"></div>
+          </div>
+        </div>
+      `;
+    }
+    html += `<p class="note">Total de clientes compradores (cualquier categoría): <strong>${data.total}</strong></p>`;
+    area.innerHTML = html;
+  }catch(e){
+    area.innerHTML = '<div class="loading">Error: ' + e.message + '</div>';
+  }
+}
+
+let TOP_CLIENTES_CATEGORIA = [];
+async function loadTopClientesCategoria(){
+  if(!CURRENT_MES || !CURRENT_ANIO) return;
+  const categoria = document.getElementById('catTopClientesSelect').value;
+  const limit = document.getElementById('limitTopClientesSelect').value;
+  const body = document.getElementById('topClientesBody');
+  body.innerHTML = '<tr><td colspan="4" style="padding:10px;">Cargando...</td></tr>';
+  try{
+    const res = await fetch(API + `/api/ranking/clientes-categoria?mes=${CURRENT_MES}&anio=${CURRENT_ANIO}&categoria=${encodeURIComponent(categoria)}&limit=${limit}${filtrosQueryString()}`, {headers: authHeaders()});
+    const rows = await res.json();
+    if(!res.ok){ body.innerHTML = '<tr><td colspan="4">' + (rows.error||'Error') + '</td></tr>'; return; }
+    TOP_CLIENTES_CATEGORIA = rows;
+    if(!rows.length){ body.innerHTML = '<tr><td colspan="4" style="padding:10px;">Sin datos para esta categoría en este período.</td></tr>'; return; }
+    body.innerHTML = rows.map(r => `
+      <tr style="border-bottom:1px solid var(--border);">
+        <td style="padding:6px;">${r.cliente_id}</td>
+        <td style="padding:6px;">${r.razon_social}</td>
+        <td style="padding:6px;">${r.domicilio}</td>
+        <td style="padding:6px; text-align:right;">${fmtHL(r.hl)}</td>
+      </tr>
+    `).join('');
+  }catch(e){
+    body.innerHTML = '<tr><td colspan="4">Error: ' + e.message + '</td></tr>';
+  }
+}
+
+function exportarTopClientesExcel(){
+  if(!TOP_CLIENTES_CATEGORIA.length){ alert('No hay datos para exportar.'); return; }
+  const data = TOP_CLIENTES_CATEGORIA.map(r => ({
+    'Código': r.cliente_id, 'Razón social': r.razon_social, 'Domicilio': r.domicilio, 'HL': r.hl,
+  }));
+  const ws = XLSX.utils.json_to_sheet(data);
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, 'Top Clientes');
+  XLSX.writeFile(wb, 'top_clientes_categoria.xlsx');
+}
+
+async function loadDiasConfig(){
+  try{
+    const res = await fetch(API + '/api/config/dias', {headers: authHeaders()});
+    const data = await res.json();
+    if(data.dias_configurados) document.getElementById('diasConfigInput').value = data.dias_configurados;
+  }catch(e){}
+}
+
+async function saveDiasConfig(){
+  const dias = Number(document.getElementById('diasConfigInput').value);
+  if(!dias){ showMsg('diasConfigMsg', 'Ingresa un numero valido', false); return; }
+  try{
+    const res = await fetch(API + '/api/config/dias', {
+      method: 'POST', headers: {'Content-Type':'application/json', ...authHeaders()},
+      body: JSON.stringify({dias})
+    });
+    const data = await res.json();
+    if(!res.ok){ showMsg('diasConfigMsg', data.error || 'Error', false); return; }
+    showMsg('diasConfigMsg', 'Guardado correctamente', true);
+    loadKpis();
+  }catch(e){
+    showMsg('diasConfigMsg', 'Error: ' + e.message, false);
+  }
+}
+</script>
+</body>
+</html>
