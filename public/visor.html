@@ -621,7 +621,7 @@ async function procesarVentasHoy(){
     const wb = await readWorkbook(file);
     const ws = wb.Sheets[wb.SheetNames[0]];
     const rows = getDenseRows(ws);
-    if(!rows || rows.length < 2) throw new Error('El archivo de ventas está vacío o no se pudo leer.');
+    if(!rows || rows.length < 2) throw new Error('El archivo de ventas está vacío o no se pudo leer. [diag] hojas: ' + wb.SheetNames.join(', ') + ' | hoja usada: ' + wb.SheetNames[0] + ' | rango (!ref): ' + (ws && ws['!ref'] || 'ninguno') + ' | filas detectadas: ' + (rows ? rows.length : 'null'));
 
     const header = rows[0];
     const idx = {
