@@ -231,16 +231,7 @@
 
   <div id="tabConfig" class="hidden">
 
-    <div class="section" id="uploadJsonSection">
-      <h2>Subir histórico ya procesado (JSON)</h2>
-      <div class="config-row">
-        <input type="file" id="fileHistoricoJson" accept=".json" style="background:var(--card2); color:var(--text); border:1px solid var(--border); padding:8px; border-radius:6px;">
-        <button onclick="procesarHistoricoJson()">Procesar y subir</button>
-      </div>
-      <div id="uploadJsonMsg" class="msg"></div>
-      <p class="note">Usar solo para meses históricos con archivos Excel demasiado grandes para procesar en el navegador. Este archivo ya viene pre-calculado.</p>
-    </div>
-        <div class="section" id="uploadVentasSection">
+    <div class="section" id="uploadVentasSection">
       <h2>Actualizar archivo de ventas del día</h2>
       <div class="config-row">
         <input type="file" id="fileVentasHoy" accept=".xlsx,.xls" style="background:var(--card2); color:var(--text); border:1px solid var(--border); padding:8px; border-radius:6px;">
@@ -519,15 +510,12 @@ function readWorkbook(file){
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
     reader.onload = e => {
-      try{ resolve(XLSX.read(e.target.result, {type:'array', cellDates:true, dense:true})); }
+      try{ resolve(XLSX.read(e.target.result, {type:'array', cellDates:true})); }
       catch(err){ reject(err); }
     };
     reader.onerror = () => reject(new Error('No se pudo leer el archivo'));
     reader.readAsArrayBuffer(file);
   });
-}
-function excelSerialToDate(n){
-  return new Date(Math.round((n - 25569) * 86400 * 1000));
 }
 function getDenseRows(ws){
   const rows = XLSX.utils.sheet_to_json(ws, {header:1, raw:true, defval: undefined});
@@ -570,152 +558,54 @@ async function procesarSupRef(){
   }
 }
 
-async function procesarHistoricoJson(){
-  const file = document.getElementById('fileHistoricoJson').files[0];
-  if(!file){ showMsg('uploadJsonMsg', 'Elegí un archivo', false); return; }
-  showMsg('uploadJsonMsg', 'Leyendo archivo...', true);
-  try{
-    const refRes = await fetch(API + '/api/referencia/supervisores', {headers: authHeaders()});
-    const refData = await refRes.json();
-    const supRef = refData.mapping || {};
-
-    const text = await file.text();
-    const data = JSON.parse(text);
-    const FALLBACK = 'SIN ASIGNAR (no en tabla de referencia)';
-    const ventas = data.ventas.map(v => ({
-      cliente_id: v.cliente_id, categoria: v.categoria, marca: v.marca, articulo: v.articulo,
-      um_hl: v.um_hl,
-      supervisor: v.es_deposito ? 'VENTA DEPOSITO' : (supRef[normName(v.vendedor)] || FALLBACK),
-      camionero: v.camionero,
-      tipo_documento: v.tipo_documento,
-      mes: v.mes, anio: v.anio,
-    }));
-
-    showMsg('uploadJsonMsg', 'Subiendo al servidor...', true);
-    const res = await fetch(API + '/api/upload', {
-      method: 'POST', headers: {'Content-Type':'application/json', ...authHeaders()},
-      body: JSON.stringify({ clientes: [], ventas, mes_actual: data.mes_actual, mes: data.mes, anio: data.anio, dias_venta_reales: data.dias_venta_reales })
-    });
-    const result = await res.json();
-    if(!res.ok){ showMsg('uploadJsonMsg', result.error || 'Error subiendo', false); return; }
-    showMsg('uploadJsonMsg', `Listo. ${data.mes_actual}: ${result.ventas} filas guardadas.`, true);
-    loadKpis();
-  }catch(e){
-    showMsg('uploadJsonMsg', 'Error: ' + e.message, false);
-  }
-}
-
-const CAT_MAP_VENTAS_HOY = {'CERVEZA':'Cervezas','AGUA':'Aguas','VINOS':'Vinos','SIDRAS':'Sidras'};
-// Se procesa en el navegador (no en el servidor) porque el servidor tiene
-// memoria limitada (512MB) y un Excel grande lo hace quedarse sin memoria
-// y crashear. La compu del usuario tiene mucha mas RAM disponible.
+// Se sube por partes (por si el archivo es grande) y el servidor lo procesa
+// con un lector en streaming (fila por fila, sin cargar el archivo entero en
+// memoria), asi que el tamaño del archivo no importa. Como el procesamiento
+// puede tardar, el servidor responde enseguida y esta funcion consulta el
+// estado hasta que termina, en vez de esperar la respuesta original.
 async function procesarVentasHoy(){
   const file = document.getElementById('fileVentasHoy').files[0];
   if(!file){ showMsg('uploadVentasMsg', 'Elegí un archivo', false); return; }
+  const CHUNK_SIZE = 4 * 1024 * 1024; // 4MB por pedazo
   try{
-    showMsg('uploadVentasMsg', 'Leyendo el archivo en tu navegador (puede tardar unos segundos, no cierres la pestaña)...', true);
-    const refRes = await fetch(API + '/api/referencia/supervisores', {headers: authHeaders()});
-    const refData = await refRes.json();
-    const supRef = refData.mapping || {};
+    showMsg('uploadVentasMsg', 'Iniciando subida...', true);
+    const startRes = await fetch(API + '/api/upload-excel/start', { method: 'POST', headers: authHeaders() });
+    const startData = await startRes.json();
+    if(!startRes.ok){ showMsg('uploadVentasMsg', startData.error || 'Error iniciando subida', false); return; }
+    const uploadId = startData.uploadId;
 
-    const wb = await readWorkbook(file);
-    const ws = wb.Sheets[wb.SheetNames[0]];
-    const rows = getDenseRows(ws);
-    if(!rows || rows.length < 2) throw new Error('El archivo de ventas está vacío o no se pudo leer.');
-
-    const header = rows[0];
-    const idx = {
-      division: findColIndex(header, 'Descripción DIVISION'),
-      marca: findColIndex(header, 'Descripción MARCA'),
-      cliente: findColIndex(header, 'Cliente'),
-      vendedor: findColIndex(header, 'Descripcion Vendedor'),
-      supervisor: findColIndex(header, 'Descripcion Supervisor'),
-      impositivo: findColIndex(header, 'Impositivo'),
-      um: findColIndex(header, 'UM Total'),
-      anulado: findColIndex(header, 'Anulado'),
-    };
-    for(const k in idx){ if(idx[k] < 0) throw new Error('Falta la columna requerida: ' + k); }
-    const fechaIdx = findColIndex(header, 'Fecha Comprobante');
-    const transpIdx = findColIndex(header, 'Descripcion Transporte');
-    const articuloIdx = findColIndex(header, 'Descripcion de Articulo');
-
-    const FALLBACK = 'SIN ASIGNAR (no en tabla de referencia)';
-    const vendAppAgg = new Map();
-    const ventaDepositoVend = new Set();
-    const fechaSet = new Set();
-    const mesCount = {};
-
-    for(let r = 1; r < rows.length; r++){
-      const row = rows[r];
-      if(!row) continue;
-      const division = row[idx.division];
-      const cat = CAT_MAP_VENTAS_HOY[division];
-      if(!cat) continue;
-      const anulado = row[idx.anulado];
-      if(anulado && anulado !== 'NO') continue;
-      const cliente = row[idx.cliente];
-      const vendedor = row[idx.vendedor] || 'SIN VENDEDOR';
-      const marca = row[idx.marca] || 'SIN MARCA';
-      const um = row[idx.um] || 0;
-      const fiscal = row[idx.impositivo] === 'SI' ? 1 : 0;
-      const transp = (transpIdx >= 0 ? row[transpIdx] : null) || 'SIN TRANSPORTE';
-      const supRaw = row[idx.supervisor];
-      if(!supRaw || String(supRaw).trim() === '') ventaDepositoVend.add(vendedor);
-
-      if(fechaIdx >= 0){
-        const fRaw = row[fechaIdx];
-        let dateObj = null;
-        if(fRaw instanceof Date && !isNaN(fRaw)) dateObj = fRaw;
-        else if(typeof fRaw === 'number' && fRaw > 0) dateObj = excelSerialToDate(fRaw);
-        else if(typeof fRaw === 'string' && fRaw.trim()){ const p = new Date(fRaw); if(!isNaN(p)) dateObj = p; }
-        if(dateObj && !isNaN(dateObj)){
-          const dstr = dateObj.getFullYear() + '-' + String(dateObj.getMonth()+1).padStart(2,'0') + '-' + String(dateObj.getDate()).padStart(2,'0');
-          fechaSet.add(dstr);
-          const mkey = dateObj.getFullYear() + '-' + String(dateObj.getMonth()+1).padStart(2,'0');
-          mesCount[mkey] = (mesCount[mkey] || 0) + 1;
-        }
-      }
-
-      if(articuloIdx >= 0 && cliente !== undefined && cliente !== null && cliente !== ''){
-        const articulo = row[articuloIdx] || 'SIN ARTICULO';
-        const vaKey = cliente + '|' + cat + '|' + marca + '|' + articulo + '|' + vendedor + '|' + transp + '|' + fiscal;
-        vendAppAgg.set(vaKey, (vendAppAgg.get(vaKey) || 0) + um);
-      }
-    }
-
-    let mesActual = '', mesNumOut = null, anioNumOut = null;
-    const bestMesEntry = Object.entries(mesCount).sort((a,b) => b[1]-a[1])[0];
-    if(bestMesEntry){
-      const [y, m] = bestMesEntry[0].split('-').map(Number);
-      mesActual = NOMBRES_MES[m] + ' ' + y;
-      mesNumOut = m; anioNumOut = y;
-    }
-
-    const ventas = [];
-    for(const [vaKey, um] of vendAppAgg.entries()){
-      if(um < 0.001) continue;
-      const [cliente_id, categoria, marca, articulo, vendedor, camionero, fiscalStr] = vaKey.split('|');
-      let supervisor;
-      if(ventaDepositoVend.has(vendedor)) supervisor = 'VENTA DEPOSITO';
-      else supervisor = supRef[normName(vendedor)] || FALLBACK;
-      ventas.push({
-        cliente_id, categoria, marca, articulo,
-        um_hl: Math.round(um * 1000) / 1000,
-        supervisor, camionero,
-        tipo_documento: fiscalStr === '1' ? 'FISCAL' : 'NO FISCAL',
-        mes: mesNumOut, anio: anioNumOut,
+    const totalPartes = Math.ceil(file.size / CHUNK_SIZE);
+    for(let i = 0; i < totalPartes; i++){
+      const start = i * CHUNK_SIZE;
+      const end = Math.min(start + CHUNK_SIZE, file.size);
+      const chunk = file.slice(start, end);
+      showMsg('uploadVentasMsg', `Subiendo parte ${i+1} de ${totalPartes}...`, true);
+      const chunkRes = await fetch(API + '/api/upload-excel/chunk?uploadId=' + encodeURIComponent(uploadId), {
+        method: 'POST',
+        headers: {'Content-Type':'application/octet-stream', ...authHeaders()},
+        body: chunk
       });
+      const chunkData = await chunkRes.json();
+      if(!chunkRes.ok){ showMsg('uploadVentasMsg', chunkData.error || `Error subiendo parte ${i+1}`, false); return; }
     }
 
-    showMsg('uploadVentasMsg', `Procesado (${ventas.length} filas). Subiendo al servidor...`, true);
-    const res = await fetch(API + '/api/upload', {
-      method: 'POST', headers: {'Content-Type':'application/json', ...authHeaders()},
-      body: JSON.stringify({ clientes: [], ventas, mes_actual: mesActual, mes: mesNumOut, anio: anioNumOut, dias_venta_reales: fechaSet.size })
+    showMsg('uploadVentasMsg', 'Todas las partes subidas. Procesando en el servidor (puede tardar varios minutos)...', true);
+    const finishRes = await fetch(API + '/api/upload-excel/finish?uploadId=' + encodeURIComponent(uploadId), {
+      method: 'POST', headers: authHeaders()
     });
-    const data = await res.json();
-    if(!res.ok){ showMsg('uploadVentasMsg', data.error || 'Error subiendo', false); return; }
-    showMsg('uploadVentasMsg', `Listo. ${mesActual}: ${data.ventas} filas guardadas.`, true);
-    loadKpis();
+    const finishData = await finishRes.json();
+    if(!finishRes.ok){ showMsg('uploadVentasMsg', finishData.error || 'Error procesando', false); return; }
+
+    while(true){
+      await new Promise(r => setTimeout(r, 3000));
+      const statusRes = await fetch(API + '/api/upload-excel/status?uploadId=' + encodeURIComponent(uploadId), { headers: authHeaders() });
+      const data = await statusRes.json();
+      if(!statusRes.ok){ showMsg('uploadVentasMsg', data.error || 'Error procesando', false); return; }
+      if(data.status === 'procesando') continue;
+      showMsg('uploadVentasMsg', `Listo. ${data.mes_actual}: ${data.ventas} filas guardadas.`, true);
+      loadKpis();
+      return;
+    }
   }catch(e){
     showMsg('uploadVentasMsg', 'Error: ' + e.message, false);
   }
