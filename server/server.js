@@ -1,4 +1,3 @@
-
 // server.js - Servidor HTTP principal
 const http = require('http');
 const fs = require('fs');
@@ -7,6 +6,7 @@ const url = require('url');
 const db = require('./db');
 const authLib = require('./auth');
 const XLSX = require('xlsx');
+const ExcelJS = require('exceljs');
 const crypto = require('crypto');
 const PORT = process.env.PORT || 3000;
 const PUBLIC_DIR = path.join(__dirname, '..', 'public');
@@ -344,6 +344,138 @@ function procesarExcelYGuardar(buffer) {
   return { ok: true, mes_actual: mesActual, ventas: resultado.ventas };
 }
  
+// procesarExcelYGuardar (arriba) carga el archivo entero en memoria con la
+// libreria xlsx: para archivos grandes (80MB+) eso hace que el proceso se
+// quede sin memoria y crashee. Esta version usa el lector en streaming de
+// ExcelJS, que lee el archivo fila por fila directo desde disco sin cargarlo
+// entero en RAM, asi que el tamaño del archivo deja de importar.
+function cellValStreaming(v) {
+  if (v === null || v === undefined) return v;
+  if (v instanceof Date) return v;
+  if (typeof v === 'object') {
+    if ('result' in v) return v.result; // celda con formula
+    if (Array.isArray(v.richText)) return v.richText.map(rt => rt.text).join(''); // texto con formato
+    if ('text' in v) return v.text; // celda con hipervinculo
+  }
+  return v;
+}
+async function procesarExcelYGuardarStreaming(filePath) {
+  const workbookReader = new ExcelJS.stream.xlsx.WorkbookReader(filePath);
+ 
+  let idx = null;
+  let fechaIdx = -1, transpIdx = -1, articuloIdx = -1;
+ 
+  const supRefRow = db.prepare('SELECT value FROM meta WHERE key = ?').get('sup_ref_json');
+  let supRef = {};
+  if (supRefRow) { try { supRef = JSON.parse(supRefRow.value); } catch (e) { supRef = {}; } }
+  const FALLBACK = 'SIN ASIGNAR (no en tabla de referencia)';
+ 
+  const vendAppAgg = new Map();
+  const ventaDepositoVend = new Set();
+  const fechaSet = new Set();
+  const mesCount = {};
+ 
+  let huboHoja = false;
+  for await (const worksheetReader of workbookReader) {
+    if (huboHoja) break; // solo la primera hoja, igual que la version no-streaming
+    huboHoja = true;
+    for await (const row of worksheetReader) {
+      const vals = row.values; // array 1-indexado (vals[0] no se usa)
+      if (row.number === 1) {
+        function findCol(name) {
+          for (let i = 1; i < vals.length; i++) { if (cellValStreaming(vals[i]) === name) return i; }
+          return -1;
+        }
+        idx = {
+          division: findCol('Descripción DIVISION'),
+          marca: findCol('Descripción MARCA'),
+          cliente: findCol('Cliente'),
+          vendedor: findCol('Descripcion Vendedor'),
+          supervisor: findCol('Descripcion Supervisor'),
+          impositivo: findCol('Impositivo'),
+          um: findCol('UM Total'),
+          anulado: findCol('Anulado'),
+        };
+        for (const k in idx) { if (idx[k] < 0) throw { status: 400, error: 'Falta la columna requerida: ' + k }; }
+        fechaIdx = findCol('Fecha Comprobante');
+        transpIdx = findCol('Descripcion Transporte');
+        articuloIdx = findCol('Descripcion de Articulo');
+        continue;
+      }
+      if (!idx) continue;
+ 
+      const division = cellValStreaming(vals[idx.division]);
+      const cat = CAT_MAP_SERVIDOR[division];
+      if (!cat) continue;
+      const anulado = cellValStreaming(vals[idx.anulado]);
+      if (anulado && anulado !== 'NO') continue;
+      const cliente = cellValStreaming(vals[idx.cliente]);
+      const vendedor = cellValStreaming(vals[idx.vendedor]) || 'SIN VENDEDOR';
+      const marca = cellValStreaming(vals[idx.marca]) || 'SIN MARCA';
+      const um = cellValStreaming(vals[idx.um]) || 0;
+      const fiscal = cellValStreaming(vals[idx.impositivo]) === 'SI' ? 1 : 0;
+      const transp = (transpIdx >= 0 ? cellValStreaming(vals[transpIdx]) : null) || 'SIN TRANSPORTE';
+      const supRaw = cellValStreaming(vals[idx.supervisor]);
+      if (!supRaw || String(supRaw).trim() === '') ventaDepositoVend.add(vendedor);
+ 
+      if (fechaIdx >= 0) {
+        const fRaw = cellValStreaming(vals[fechaIdx]);
+        let dateObj = null;
+        if (fRaw instanceof Date && !isNaN(fRaw)) dateObj = fRaw;
+        else if (typeof fRaw === 'number' && fRaw > 0) dateObj = excelSerialToDate(fRaw);
+        else if (typeof fRaw === 'string' && fRaw.trim()) { const p = new Date(fRaw); if (!isNaN(p)) dateObj = p; }
+        if (dateObj && !isNaN(dateObj)) {
+          const dstr = dateObj.getFullYear() + '-' + String(dateObj.getMonth() + 1).padStart(2, '0') + '-' + String(dateObj.getDate()).padStart(2, '0');
+          fechaSet.add(dstr);
+          const mkey = dateObj.getFullYear() + '-' + String(dateObj.getMonth() + 1).padStart(2, '0');
+          mesCount[mkey] = (mesCount[mkey] || 0) + 1;
+        }
+      }
+ 
+      if (articuloIdx >= 0 && cliente !== undefined && cliente !== null && cliente !== '') {
+        const articulo = cellValStreaming(vals[articuloIdx]) || 'SIN ARTICULO';
+        const vaKey = cliente + '|' + cat + '|' + marca + '|' + articulo + '|' + vendedor + '|' + transp + '|' + fiscal;
+        vendAppAgg.set(vaKey, (vendAppAgg.get(vaKey) || 0) + um);
+      }
+    }
+  }
+ 
+  if (!idx) throw { status: 400, error: 'El archivo de ventas está vacío o no se pudo leer.' };
+ 
+  let mesActual = '', mesNumOut = null, anioNumOut = null;
+  const bestMesEntry = Object.entries(mesCount).sort((a, b) => b[1] - a[1])[0];
+  if (bestMesEntry) {
+    const [y, m] = bestMesEntry[0].split('-').map(Number);
+    const NOMBRES = ['Enero', 'Febrero', 'Marzo', 'Abril', 'Mayo', 'Junio', 'Julio', 'Agosto', 'Septiembre', 'Octubre', 'Noviembre', 'Diciembre'];
+    mesActual = NOMBRES[m - 1] + ' ' + y;
+    mesNumOut = m; anioNumOut = y;
+  }
+ 
+  const ventas = [];
+  for (const [vaKey, um] of vendAppAgg.entries()) {
+    if (um < 0.001) continue;
+    const [cliente_id, categoria, marca, articulo, vendedor, camionero, fiscalStr] = vaKey.split('|');
+    let supervisor;
+    if (ventaDepositoVend.has(vendedor)) supervisor = 'VENTA DEPOSITO';
+    else supervisor = supRef[normNameServidor(vendedor)] || FALLBACK;
+    ventas.push({
+      cliente_id, categoria, marca, articulo,
+      um_hl: Math.round(um * 1000) / 1000,
+      supervisor, camionero,
+      tipo_documento: fiscalStr === '1' ? 'FISCAL' : 'NO FISCAL',
+      mes: mesNumOut, anio: anioNumOut,
+    });
+  }
+ 
+  let resultado;
+  try {
+    resultado = guardarVentas({ clientes: [], ventas, mes_actual: mesActual, mes: mesNumOut, anio: anioNumOut, dias_venta_reales: fechaSet.size });
+  } catch (e) {
+    throw { status: 500, error: 'Error guardando datos: ' + e.message };
+  }
+  return { ok: true, mes_actual: mesActual, ventas: resultado.ventas };
+}
+ 
 route('POST', '/api/upload-excel', async (req, res) => {
   const session = requireAuth(req, res, ['admin', 'supervisor']);
   if (!session) return;
@@ -416,8 +548,7 @@ route('POST', '/api/upload-excel/finish', async (req, res) => {
   sendJson(res, 202, { ok: true, uploadId, procesando: true });
  
   try {
-    const buffer = fs.readFileSync(filePath);
-    const resultado = procesarExcelYGuardar(buffer);
+    const resultado = await procesarExcelYGuardarStreaming(filePath);
     uploadJobs.set(uploadId, { status: 'listo', resultado });
   } catch (e) {
     uploadJobs.set(uploadId, { status: 'error', error: e.error || e.message || 'Error desconocido' });
