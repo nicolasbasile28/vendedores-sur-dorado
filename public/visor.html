@@ -668,4 +668,171 @@ async function procesarSupRef(){
     const header = rows[0];
     const vIdx = findColIndex(header, 'VENDEDOR');
     const sIdx = findColIndex(header, 'SUPERVISOR');
-    if(vIdx < 0 || sIdx <
+    if(vIdx < 0 || sIdx < 0) throw new Error('Faltan las columnas VENDEDOR / SUPERVISOR');
+    const mapping = {};
+    for(let r=1;r<rows.length;r++){
+      const row = rows[r];
+      if(!row || !row[vIdx]) continue;
+      mapping[normName(row[vIdx])] = (row[sIdx]||'SIN SUPERVISOR').toString().trim();
+    }
+    const res = await fetch(API + '/api/referencia/supervisores', {
+      method: 'POST', headers: {'Content-Type':'application/json', ...authHeaders()},
+      body: JSON.stringify({mapping})
+    });
+    const data = await res.json();
+    if(!res.ok){ showMsg('supRefMsg', data.error || 'Error', false); return; }
+    showMsg('supRefMsg', `Mapeo actualizado: ${data.cantidad} vendedores`, true);
+  }catch(e){
+    showMsg('supRefMsg', 'Error: ' + e.message, false);
+  }
+}
+
+// Se sube por partes (por si el archivo es grande) y el servidor lo procesa
+// con un lector en streaming (fila por fila, sin cargar el archivo entero en
+// memoria), asi que el tamaño del archivo no importa. Como el procesamiento
+// puede tardar, el servidor responde enseguida y esta funcion consulta el
+// estado hasta que termina, en vez de esperar la respuesta original.
+async function procesarVentasHoy(){
+  const file = document.getElementById('fileVentasHoy').files[0];
+  if(!file){ showMsg('uploadVentasMsg', 'Elegí un archivo', false); return; }
+  const CHUNK_SIZE = 4 * 1024 * 1024; // 4MB por pedazo
+  try{
+    showMsg('uploadVentasMsg', 'Iniciando subida...', true);
+    const startRes = await fetch(API + '/api/upload-excel/start', { method: 'POST', headers: authHeaders() });
+    const startData = await startRes.json();
+    if(!startRes.ok){ showMsg('uploadVentasMsg', startData.error || 'Error iniciando subida', false); return; }
+    const uploadId = startData.uploadId;
+
+    const totalPartes = Math.ceil(file.size / CHUNK_SIZE);
+    for(let i = 0; i < totalPartes; i++){
+      const start = i * CHUNK_SIZE;
+      const end = Math.min(start + CHUNK_SIZE, file.size);
+      const chunk = file.slice(start, end);
+      showMsg('uploadVentasMsg', `Subiendo parte ${i+1} de ${totalPartes}...`, true);
+      const chunkRes = await fetch(API + '/api/upload-excel/chunk?uploadId=' + encodeURIComponent(uploadId), {
+        method: 'POST',
+        headers: {'Content-Type':'application/octet-stream', ...authHeaders()},
+        body: chunk
+      });
+      const chunkData = await chunkRes.json();
+      if(!chunkRes.ok){ showMsg('uploadVentasMsg', chunkData.error || `Error subiendo parte ${i+1}`, false); return; }
+    }
+
+    showMsg('uploadVentasMsg', 'Todas las partes subidas. Procesando en el servidor (puede tardar varios minutos)...', true);
+    const finishRes = await fetch(API + '/api/upload-excel/finish?uploadId=' + encodeURIComponent(uploadId), {
+      method: 'POST', headers: authHeaders()
+    });
+    const finishData = await finishRes.json();
+    if(!finishRes.ok){ showMsg('uploadVentasMsg', finishData.error || 'Error procesando', false); return; }
+
+    while(true){
+      await new Promise(r => setTimeout(r, 3000));
+      const statusRes = await fetch(API + '/api/upload-excel/status?uploadId=' + encodeURIComponent(uploadId), { headers: authHeaders() });
+      const data = await statusRes.json();
+      if(!statusRes.ok){ showMsg('uploadVentasMsg', data.error || 'Error procesando', false); return; }
+      if(data.status === 'procesando') continue;
+      showMsg('uploadVentasMsg', `Listo. ${data.mes_actual}: ${data.ventas} filas guardadas.`, true);
+      loadKpis();
+      return;
+    }
+  }catch(e){
+    showMsg('uploadVentasMsg', 'Error: ' + e.message, false);
+  }
+}
+
+async function loadCompradores(){
+  if(!CURRENT_MES || !CURRENT_ANIO) return;
+  const area = document.getElementById('compradoresArea');
+  area.innerHTML = '<div class="loading">Cargando...</div>';
+  try{
+    const res = await fetch(API + `/api/compradores?mes=${CURRENT_MES}&anio=${CURRENT_ANIO}${filtrosQueryString()}`, {headers: authHeaders()});
+    const data = await res.json();
+    if(!res.ok){ area.innerHTML = '<div class="loading">' + (data.error||'Error') + '</div>'; return; }
+    const cats = ['Cervezas','Aguas','Vinos','Sidras'];
+    const max = Math.max(data.total, 1);
+    let html = '';
+    for(const cat of cats){
+      const n = data.categorias[cat] || 0;
+      const pct = max > 0 ? (n / max * 100) : 0;
+      html += `
+        <div style="margin-bottom:10px;">
+          <div style="display:flex; justify-content:space-between; font-size:13px; margin-bottom:3px;">
+            <span>${cat}</span><span style="color:var(--text2);">${n} clientes</span>
+          </div>
+          <div style="background:var(--card2); border-radius:4px; height:10px; overflow:hidden;">
+            <div style="background:var(--dorado); height:100%; width:${pct}%;"></div>
+          </div>
+        </div>
+      `;
+    }
+    html += `<p class="note">Total de clientes compradores (cualquier categoría): <strong>${data.total}</strong></p>`;
+    area.innerHTML = html;
+  }catch(e){
+    area.innerHTML = '<div class="loading">Error: ' + e.message + '</div>';
+  }
+}
+
+let TOP_CLIENTES_CATEGORIA = [];
+async function loadTopClientesCategoria(){
+  if(!CURRENT_MES || !CURRENT_ANIO) return;
+  const categoria = document.getElementById('catTopClientesSelect').value;
+  const limit = document.getElementById('limitTopClientesSelect').value;
+  const body = document.getElementById('topClientesBody');
+  body.innerHTML = '<tr><td colspan="4" style="padding:10px;">Cargando...</td></tr>';
+  try{
+    const res = await fetch(API + `/api/ranking/clientes-categoria?mes=${CURRENT_MES}&anio=${CURRENT_ANIO}&categoria=${encodeURIComponent(categoria)}&limit=${limit}${filtrosQueryString()}`, {headers: authHeaders()});
+    const rows = await res.json();
+    if(!res.ok){ body.innerHTML = '<tr><td colspan="4">' + (rows.error||'Error') + '</td></tr>'; return; }
+    TOP_CLIENTES_CATEGORIA = rows;
+    if(!rows.length){ body.innerHTML = '<tr><td colspan="4" style="padding:10px;">Sin datos para esta categoría en este período.</td></tr>'; return; }
+    body.innerHTML = rows.map(r => `
+      <tr style="border-bottom:1px solid var(--border);">
+        <td style="padding:6px;">${r.cliente_id}</td>
+        <td style="padding:6px;">${r.razon_social}</td>
+        <td style="padding:6px;">${r.domicilio}</td>
+        <td style="padding:6px; text-align:right;">${fmtHL(r.hl)}</td>
+      </tr>
+    `).join('');
+  }catch(e){
+    body.innerHTML = '<tr><td colspan="4">Error: ' + e.message + '</td></tr>';
+  }
+}
+
+function exportarTopClientesExcel(){
+  if(!TOP_CLIENTES_CATEGORIA.length){ alert('No hay datos para exportar.'); return; }
+  const data = TOP_CLIENTES_CATEGORIA.map(r => ({
+    'Código': r.cliente_id, 'Razón social': r.razon_social, 'Domicilio': r.domicilio, 'HL': r.hl,
+  }));
+  const ws = XLSX.utils.json_to_sheet(data);
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, 'Top Clientes');
+  XLSX.writeFile(wb, 'top_clientes_categoria.xlsx');
+}
+
+async function loadDiasConfig(){
+  try{
+    const res = await fetch(API + '/api/config/dias', {headers: authHeaders()});
+    const data = await res.json();
+    if(data.dias_configurados) document.getElementById('diasConfigInput').value = data.dias_configurados;
+  }catch(e){}
+}
+
+async function saveDiasConfig(){
+  const dias = Number(document.getElementById('diasConfigInput').value);
+  if(!dias){ showMsg('diasConfigMsg', 'Ingresa un numero valido', false); return; }
+  try{
+    const res = await fetch(API + '/api/config/dias', {
+      method: 'POST', headers: {'Content-Type':'application/json', ...authHeaders()},
+      body: JSON.stringify({dias})
+    });
+    const data = await res.json();
+    if(!res.ok){ showMsg('diasConfigMsg', data.error || 'Error', false); return; }
+    showMsg('diasConfigMsg', 'Guardado correctamente', true);
+    loadKpis();
+  }catch(e){
+    showMsg('diasConfigMsg', 'Error: ' + e.message, false);
+  }
+}
+</script>
+</body>
+</html>
