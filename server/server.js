@@ -143,7 +143,6 @@ route('GET', '/api/cliente/:id', async (req, res, params) => {
   for (const cat of CATS) {
     const rows = db.prepare(`
       SELECT marca, SUM(um_hl) as hl FROM ventas
-            SELECT marca, SUM(um_hl) as hl FROM ventas
       WHERE cliente_id = ? AND categoria = ?
       GROUP BY marca HAVING SUM(um_hl) >= 0.001
       ORDER BY hl DESC
@@ -181,10 +180,10 @@ function guardarVentas({ clientes, ventas, mes_actual, mes, anio, dias_venta_rea
       insCliente.run(String(c.cliente_id), c.razon_social || '', c.domicilio || '', c.personal_comercial || '', c.dias_visita || '');
     }
     const insVenta = db.prepare(`
-      INSERT INTO ventas (cliente_id, categoria, marca, articulo, um_hl, supervisor, camionero, tipo_documento, mes, anio) VALUES (?,?,?,?,?,?,?,?,?,?)
+      INSERT INTO ventas (cliente_id, categoria, marca, articulo, um_hl, supervisor, camionero, tipo_documento, mes, anio, canal) VALUES (?,?,?,?,?,?,?,?,?,?,?)
     `);
     for (const v of ventas) {
-      insVenta.run(String(v.cliente_id), v.categoria, v.marca, v.articulo, Number(v.um_hl) || 0, v.supervisor || null, v.camionero || null, v.tipo_documento || null, v.mes || null, v.anio || null);
+      insVenta.run(String(v.cliente_id), v.categoria, v.marca, v.articulo, Number(v.um_hl) || 0, v.supervisor || null, v.camionero || null, v.tipo_documento || null, v.mes || null, v.anio || null, v.canal || null);
     }
     const setMeta = db.prepare('INSERT OR REPLACE INTO meta (key, value) VALUES (?,?)');
     setMeta.run('mes_actual', mes_actual || '');
@@ -210,7 +209,7 @@ function guardarVentas({ clientes, ventas, mes_actual, mes, anio, dias_venta_rea
   }
   return { clientes: clientes.length, ventas: ventas.length };
 }
- 
+
 route('POST', '/api/upload', async (req, res) => {
   const session = requireAuth(req, res, ['admin', 'supervisor']);
   if (!session) return;
@@ -225,7 +224,7 @@ route('POST', '/api/upload', async (req, res) => {
   }
   sendJson(res, 200, { ok: true, clientes: resultado.clientes, ventas: resultado.ventas });
 });
- 
+
 const CAT_MAP_SERVIDOR = { 'CERVEZA': 'Cervezas', 'AGUA': 'Aguas', 'VINOS': 'Vinos', 'SIDRAS': 'Sidras' };
 const normNameServidor = s => (s || '').toString().toUpperCase().trim().split(/\s+/).sort().join(' ');
 function excelSerialToDate(n) {
@@ -241,7 +240,7 @@ function procesarExcelYGuardar(buffer) {
   const ws = wb.Sheets[wb.SheetNames[0]];
   const rows = XLSX.utils.sheet_to_json(ws, { header: 1, raw: true, defval: undefined });
   if (!rows || rows.length < 2) throw { status: 400, error: 'El archivo de ventas está vacío o no se pudo leer.' };
- 
+
   const header = rows[0];
   function findCol(name) {
     for (let i = 0; i < header.length; i++) { if (header[i] === name) return i; }
@@ -261,17 +260,18 @@ function procesarExcelYGuardar(buffer) {
   const fechaIdx = findCol('Fecha Comprobante');
   const transpIdx = findCol('Descripcion Transporte');
   const articuloIdx = findCol('Descripcion de Articulo');
- 
+  const canalIdx = findCol('Descripcion Subcanal MKT');
+
   const supRefRow = db.prepare('SELECT value FROM meta WHERE key = ?').get('sup_ref_json');
   let supRef = {};
   if (supRefRow) { try { supRef = JSON.parse(supRefRow.value); } catch (e) { supRef = {}; } }
   const FALLBACK = 'SIN ASIGNAR (no en tabla de referencia)';
- 
+
   const vendAppAgg = new Map();
   const ventaDepositoVend = new Set();
   const fechaSet = new Set();
   const mesCount = {};
- 
+
   for (let r = 1; r < rows.length; r++) {
     const row = rows[r];
     if (!row) continue;
@@ -286,9 +286,10 @@ function procesarExcelYGuardar(buffer) {
     const um = row[idx.um] || 0;
     const fiscal = row[idx.impositivo] === 'SI' ? 1 : 0;
     const transp = (transpIdx >= 0 ? row[transpIdx] : null) || 'SIN TRANSPORTE';
+    const canal = (canalIdx >= 0 ? row[canalIdx] : null) || 'SIN CANAL';
     const supRaw = row[idx.supervisor];
     if (!supRaw || String(supRaw).trim() === '') ventaDepositoVend.add(vendedor);
- 
+
     if (fechaIdx >= 0) {
       const fRaw = row[fechaIdx];
       let dateObj = null;
@@ -296,20 +297,20 @@ function procesarExcelYGuardar(buffer) {
       else if (typeof fRaw === 'number' && fRaw > 0) dateObj = excelSerialToDate(fRaw);
       else if (typeof fRaw === 'string' && fRaw.trim()) { const p = new Date(fRaw); if (!isNaN(p)) dateObj = p; }
       if (dateObj && !isNaN(dateObj)) {
-                const dstr = dateObj.getFullYear() + '-' + String(dateObj.getMonth() + 1).padStart(2, '0') + '-' + String(dateObj.getDate()).padStart(2, '0');
+        const dstr = dateObj.getFullYear() + '-' + String(dateObj.getMonth() + 1).padStart(2, '0') + '-' + String(dateObj.getDate()).padStart(2, '0');
         fechaSet.add(dstr);
         const mkey = dateObj.getFullYear() + '-' + String(dateObj.getMonth() + 1).padStart(2, '0');
         mesCount[mkey] = (mesCount[mkey] || 0) + 1;
       }
     }
- 
+
     if (articuloIdx >= 0 && cliente !== undefined && cliente !== null && cliente !== '') {
       const articulo = row[articuloIdx] || 'SIN ARTICULO';
-      const vaKey = cliente + '|' + cat + '|' + marca + '|' + articulo + '|' + vendedor + '|' + transp + '|' + fiscal;
+      const vaKey = cliente + '|' + cat + '|' + marca + '|' + articulo + '|' + vendedor + '|' + transp + '|' + fiscal + '|' + canal;
       vendAppAgg.set(vaKey, (vendAppAgg.get(vaKey) || 0) + um);
     }
   }
- 
+
   let mesActual = '', mesNumOut = null, anioNumOut = null;
   const bestMesEntry = Object.entries(mesCount).sort((a, b) => b[1] - a[1])[0];
   if (bestMesEntry) {
@@ -318,23 +319,23 @@ function procesarExcelYGuardar(buffer) {
     mesActual = NOMBRES[m - 1] + ' ' + y;
     mesNumOut = m; anioNumOut = y;
   }
- 
+
   const ventas = [];
   for (const [vaKey, um] of vendAppAgg.entries()) {
     if (um < 0.001) continue;
-    const [cliente_id, categoria, marca, articulo, vendedor, camionero, fiscalStr] = vaKey.split('|');
+    const [cliente_id, categoria, marca, articulo, vendedor, camionero, fiscalStr, canal] = vaKey.split('|');
     let supervisor;
     if (ventaDepositoVend.has(vendedor)) supervisor = 'VENTA DEPOSITO';
     else supervisor = supRef[normNameServidor(vendedor)] || FALLBACK;
     ventas.push({
       cliente_id, categoria, marca, articulo,
       um_hl: Math.round(um * 1000) / 1000,
-      supervisor, camionero,
+      supervisor, camionero, canal,
       tipo_documento: fiscalStr === '1' ? 'FISCAL' : 'NO FISCAL',
       mes: mesNumOut, anio: anioNumOut,
     });
   }
- 
+
   let resultado;
   try {
     resultado = guardarVentas({ clientes: [], ventas, mes_actual: mesActual, mes: mesNumOut, anio: anioNumOut, dias_venta_reales: fechaSet.size });
@@ -343,7 +344,7 @@ function procesarExcelYGuardar(buffer) {
   }
   return { ok: true, mes_actual: mesActual, ventas: resultado.ventas };
 }
- 
+
 // procesarExcelYGuardar (arriba) carga el archivo entero en memoria con la
 // libreria xlsx: para archivos grandes (80MB+) eso hace que el proceso se
 // quede sin memoria y crashee. Esta version usa el lector en streaming de
@@ -361,20 +362,20 @@ function cellValStreaming(v) {
 }
 async function procesarExcelYGuardarStreaming(filePath) {
   const workbookReader = new ExcelJS.stream.xlsx.WorkbookReader(filePath);
- 
+
   let idx = null;
-  let fechaIdx = -1, transpIdx = -1, articuloIdx = -1;
- 
+  let fechaIdx = -1, transpIdx = -1, articuloIdx = -1, canalIdx = -1;
+
   const supRefRow = db.prepare('SELECT value FROM meta WHERE key = ?').get('sup_ref_json');
   let supRef = {};
   if (supRefRow) { try { supRef = JSON.parse(supRefRow.value); } catch (e) { supRef = {}; } }
   const FALLBACK = 'SIN ASIGNAR (no en tabla de referencia)';
- 
+
   const vendAppAgg = new Map();
   const ventaDepositoVend = new Set();
   const fechaSet = new Set();
   const mesCount = {};
- 
+
   let huboHoja = false;
   for await (const worksheetReader of workbookReader) {
     if (huboHoja) break; // solo la primera hoja, igual que la version no-streaming
@@ -400,10 +401,11 @@ async function procesarExcelYGuardarStreaming(filePath) {
         fechaIdx = findCol('Fecha Comprobante');
         transpIdx = findCol('Descripcion Transporte');
         articuloIdx = findCol('Descripcion de Articulo');
+        canalIdx = findCol('Descripcion Subcanal MKT');
         continue;
       }
       if (!idx) continue;
- 
+
       const division = cellValStreaming(vals[idx.division]);
       const cat = CAT_MAP_SERVIDOR[division];
       if (!cat) continue;
@@ -415,9 +417,10 @@ async function procesarExcelYGuardarStreaming(filePath) {
       const um = cellValStreaming(vals[idx.um]) || 0;
       const fiscal = cellValStreaming(vals[idx.impositivo]) === 'SI' ? 1 : 0;
       const transp = (transpIdx >= 0 ? cellValStreaming(vals[transpIdx]) : null) || 'SIN TRANSPORTE';
+      const canal = (canalIdx >= 0 ? cellValStreaming(vals[canalIdx]) : null) || 'SIN CANAL';
       const supRaw = cellValStreaming(vals[idx.supervisor]);
       if (!supRaw || String(supRaw).trim() === '') ventaDepositoVend.add(vendedor);
- 
+
       if (fechaIdx >= 0) {
         const fRaw = cellValStreaming(vals[fechaIdx]);
         let dateObj = null;
@@ -431,17 +434,17 @@ async function procesarExcelYGuardarStreaming(filePath) {
           mesCount[mkey] = (mesCount[mkey] || 0) + 1;
         }
       }
- 
+
       if (articuloIdx >= 0 && cliente !== undefined && cliente !== null && cliente !== '') {
         const articulo = cellValStreaming(vals[articuloIdx]) || 'SIN ARTICULO';
-        const vaKey = cliente + '|' + cat + '|' + marca + '|' + articulo + '|' + vendedor + '|' + transp + '|' + fiscal;
+        const vaKey = cliente + '|' + cat + '|' + marca + '|' + articulo + '|' + vendedor + '|' + transp + '|' + fiscal + '|' + canal;
         vendAppAgg.set(vaKey, (vendAppAgg.get(vaKey) || 0) + um);
       }
     }
   }
- 
+
   if (!idx) throw { status: 400, error: 'El archivo de ventas está vacío o no se pudo leer.' };
- 
+
   let mesActual = '', mesNumOut = null, anioNumOut = null;
   const bestMesEntry = Object.entries(mesCount).sort((a, b) => b[1] - a[1])[0];
   if (bestMesEntry) {
@@ -450,23 +453,23 @@ async function procesarExcelYGuardarStreaming(filePath) {
     mesActual = NOMBRES[m - 1] + ' ' + y;
     mesNumOut = m; anioNumOut = y;
   }
- 
+
   const ventas = [];
   for (const [vaKey, um] of vendAppAgg.entries()) {
     if (um < 0.001) continue;
-    const [cliente_id, categoria, marca, articulo, vendedor, camionero, fiscalStr] = vaKey.split('|');
+    const [cliente_id, categoria, marca, articulo, vendedor, camionero, fiscalStr, canal] = vaKey.split('|');
     let supervisor;
     if (ventaDepositoVend.has(vendedor)) supervisor = 'VENTA DEPOSITO';
     else supervisor = supRef[normNameServidor(vendedor)] || FALLBACK;
     ventas.push({
       cliente_id, categoria, marca, articulo,
       um_hl: Math.round(um * 1000) / 1000,
-      supervisor, camionero,
+      supervisor, camionero, canal,
       tipo_documento: fiscalStr === '1' ? 'FISCAL' : 'NO FISCAL',
       mes: mesNumOut, anio: anioNumOut,
     });
   }
- 
+
   let resultado;
   try {
     resultado = guardarVentas({ clientes: [], ventas, mes_actual: mesActual, mes: mesNumOut, anio: anioNumOut, dias_venta_reales: fechaSet.size });
@@ -475,7 +478,7 @@ async function procesarExcelYGuardarStreaming(filePath) {
   }
   return { ok: true, mes_actual: mesActual, ventas: resultado.ventas };
 }
- 
+
 route('POST', '/api/upload-excel', async (req, res) => {
   const session = requireAuth(req, res, ['admin', 'supervisor']);
   if (!session) return;
@@ -492,21 +495,21 @@ route('POST', '/api/upload-excel', async (req, res) => {
     sendJson(res, e.status || 500, { error: e.error || e.message || 'Error desconocido' });
   }
 });
- 
+
 const DATA_DIR = process.env.DB_PATH ? path.dirname(process.env.DB_PATH) : path.join(__dirname, '..', 'data');
 const TMP_DIR = path.join(DATA_DIR, 'tmp_uploads');
 try { fs.mkdirSync(TMP_DIR, { recursive: true }); } catch (e) {}
- 
+
 function tmpPathFor(uploadId) {
   if (!/^[a-f0-9]{32}$/.test(uploadId)) return null;
   return path.join(TMP_DIR, uploadId + '.bin');
 }
- 
+
 // Jobs de procesamiento en memoria: el archivo puede tardar mas que el timeout
 // del proxy (Render u otro), asi que /finish responde enseguida y el frontend
 // consulta el estado con /status en vez de esperar la respuesta del POST.
 const uploadJobs = new Map();
- 
+
 route('POST', '/api/upload-excel/start', async (req, res) => {
   const session = requireAuth(req, res, ['admin', 'supervisor']);
   if (!session) return;
@@ -515,7 +518,7 @@ route('POST', '/api/upload-excel/start', async (req, res) => {
   fs.writeFileSync(filePath, Buffer.alloc(0));
   sendJson(res, 200, { uploadId });
 });
- 
+
 route('POST', '/api/upload-excel/chunk', async (req, res) => {
   const session = requireAuth(req, res, ['admin', 'supervisor']);
   if (!session) return;
@@ -531,7 +534,7 @@ route('POST', '/api/upload-excel/chunk', async (req, res) => {
   fs.appendFileSync(filePath, chunk);
   sendJson(res, 200, { ok: true, size: fs.statSync(filePath).size });
 });
- 
+
 route('POST', '/api/upload-excel/finish', async (req, res) => {
   const session = requireAuth(req, res, ['admin', 'supervisor']);
   if (!session) return;
@@ -539,14 +542,14 @@ route('POST', '/api/upload-excel/finish', async (req, res) => {
   const uploadId = parsed.query.uploadId || '';
   const filePath = tmpPathFor(uploadId);
   if (!filePath || !fs.existsSync(filePath)) return sendJson(res, 400, { error: 'uploadId invalido o expirado' });
- 
+
   uploadJobs.set(uploadId, { status: 'procesando' });
   // Responder ya: procesarExcelYGuardar puede tardar varios minutos con
   // archivos grandes y superar el timeout del proxy, que devuelve HTML
   // en vez de JSON y rompe el .json() del frontend. El procesamiento
   // sigue despues de esta respuesta y el resultado se consulta por /status.
   sendJson(res, 202, { ok: true, uploadId, procesando: true });
- 
+
   try {
     const resultado = await procesarExcelYGuardarStreaming(filePath);
     uploadJobs.set(uploadId, { status: 'listo', resultado });
@@ -556,7 +559,7 @@ route('POST', '/api/upload-excel/finish', async (req, res) => {
     try { fs.unlinkSync(filePath); } catch (e) {}
   }
 });
- 
+
 route('GET', '/api/upload-excel/status', async (req, res) => {
   const session = requireAuth(req, res, ['admin', 'supervisor']);
   if (!session) return;
@@ -568,7 +571,7 @@ route('GET', '/api/upload-excel/status', async (req, res) => {
   if (job.status === 'listo') { uploadJobs.delete(uploadId); return sendJson(res, 200, { status: 'listo', ...job.resultado }); }
   sendJson(res, 200, { status: 'procesando' });
 });
- 
+
 function buildFiltros(query) {
   const filtros = { supervisor: query.supervisor || '', camionero: query.camionero || '', vendedor: query.vendedor || '', dia: query.dia || '' };
   let needsJoin = !!(filtros.vendedor || filtros.dia);
@@ -581,7 +584,7 @@ function buildFiltros(query) {
   const join = needsJoin ? 'LEFT JOIN clientes c ON c.cliente_id = v.cliente_id' : '';
   return { clause, params, join };
 }
- 
+
 route('GET', '/api/filtros/opciones', async (req, res) => {
   if (!requireAuth(req, res, ['admin', 'supervisor', 'vendedor'])) return;
   const supervisores = db.prepare(`SELECT DISTINCT supervisor FROM ventas WHERE supervisor IS NOT NULL AND supervisor != '' ORDER BY supervisor`).all().map(r => r.supervisor);
@@ -590,7 +593,7 @@ route('GET', '/api/filtros/opciones', async (req, res) => {
   const dias = db.prepare(`SELECT DISTINCT dias_visita FROM clientes WHERE dias_visita IS NOT NULL AND dias_visita != '' ORDER BY dias_visita`).all().map(r => r.dias_visita);
   sendJson(res, 200, { supervisores, camioneros, vendedores, dias });
 });
- 
+
 route('GET', '/api/kpis', async (req, res) => {
   if (!requireAuth(req, res, ['admin', 'supervisor', 'vendedor'])) return;
   const parsed = url.parse(req.url, true);
@@ -598,29 +601,40 @@ route('GET', '/api/kpis', async (req, res) => {
   const anio = Number(parsed.query.anio);
   if (!mes || !anio) return sendJson(res, 400, { error: 'Faltan parametros mes y anio' });
   const { clause, params, join } = buildFiltros(parsed.query);
- 
+
   const diasConfigRow = db.prepare('SELECT value FROM meta WHERE key = ?').get('dias_configurados');
   const diasConfigurados = diasConfigRow ? Number(diasConfigRow.value) : null;
   const diasRealesRow = db.prepare('SELECT value FROM meta WHERE key = ?').get(`dias_reales_${anio}_${String(mes).padStart(2, '0')}`);
   const diasReales = diasRealesRow ? Number(diasRealesRow.value) : null;
-    const CATS = ['Cervezas', 'Aguas', 'Vinos', 'Sidras'];
+
+  let mesAnteriorNum = mes - 1, anioMesAnterior = anio;
+  if (mesAnteriorNum < 1) { mesAnteriorNum = 12; anioMesAnterior = anio - 1; }
+
+  const CATS = ['Cervezas', 'Aguas', 'Vinos', 'Sidras'];
   const resultado = {};
   for (const cat of CATS) {
     const actualRow = db.prepare(`SELECT SUM(v.um_hl) as total FROM ventas v ${join} WHERE v.categoria = ? AND v.mes = ? AND v.anio = ?${clause}`).get(cat, mes, anio, ...params);
     const anteriorRow = db.prepare(`SELECT SUM(v.um_hl) as total FROM ventas v ${join} WHERE v.categoria = ? AND v.mes = ? AND v.anio = ?${clause}`).get(cat, mes, anio - 1, ...params);
+    const mesAnteriorRow = db.prepare(`SELECT SUM(v.um_hl) as total FROM ventas v ${join} WHERE v.categoria = ? AND v.mes = ? AND v.anio = ?${clause}`).get(cat, mesAnteriorNum, anioMesAnterior, ...params);
     const actual = actualRow.total || 0;
     const anterior = anteriorRow.total || 0;
+    const mesAnterior = mesAnteriorRow.total || 0;
     const proyectado = (diasReales && diasConfigurados) ? (actual / diasReales * diasConfigurados) : null;
     const variacionPct = anterior > 0 ? ((actual - anterior) / anterior * 100) : null;
+    const variacionMesPct = mesAnterior > 0 ? ((actual - mesAnterior) / mesAnterior * 100) : null;
     resultado[cat] = {
       actual: Math.round(actual * 1000) / 1000,
       anio_anterior: Math.round(anterior * 1000) / 1000,
+      mes_anterior: Math.round(mesAnterior * 1000) / 1000,
       proyectado: proyectado !== null ? Math.round(proyectado * 1000) / 1000 : null,
       variacion_pct: variacionPct !== null ? Math.round(variacionPct * 10) / 10 : null,
+      variacion_mes_pct: variacionMesPct !== null ? Math.round(variacionMesPct * 10) / 10 : null,
     };
   }
   sendJson(res, 200, {
     mes, anio,
+    mes_anterior_num: mesAnteriorNum,
+    anio_mes_anterior: anioMesAnterior,
     dias_configurados: diasConfigurados,
     dias_venta_reales: diasReales,
     categorias: resultado,
@@ -633,7 +647,7 @@ route('GET', '/api/meta', async (req, res) => {
   rows.forEach(r => out[r.key] = r.value);
   sendJson(res, 200, out);
 });
- 
+
 route('GET', '/api/config/dias', async (req, res) => {
   if (!requireAuth(req, res, ['admin', 'supervisor', 'vendedor'])) return;
   const row = db.prepare('SELECT value FROM meta WHERE key = ?').get('dias_configurados');
@@ -647,7 +661,7 @@ route('POST', '/api/config/dias', async (req, res) => {
   db.prepare('INSERT OR REPLACE INTO meta (key, value) VALUES (?,?)').run('dias_configurados', String(dias));
   sendJson(res, 200, { ok: true, dias_configurados: dias });
 });
- 
+
 route('GET', '/api/admin/users', async (req, res) => {
   if (!requireAuth(req, res, ['admin'])) return;
   const rows = db.prepare('SELECT id, username, role FROM users ORDER BY role, username').all();
@@ -691,7 +705,7 @@ route('POST', '/api/admin/users/:id/reset-password', async (req, res, params) =>
   db.prepare('UPDATE users SET password_hash = ?, salt = ? WHERE id = ?').run(hash, salt, params.id);
   sendJson(res, 200, { ok: true });
 });
- 
+
 route('GET', '/api/ranking/marcas', async (req, res) => {
   if (!requireAuth(req, res, ['admin', 'supervisor', 'vendedor'])) return;
   const parsed = url.parse(req.url, true);
@@ -731,7 +745,7 @@ route('GET', '/api/ranking/clientes', async (req, res) => {
     hl: Math.round(r.hl * 1000) / 1000,
   })));
 });
- 
+
 route('GET', '/api/referencia/supervisores', async (req, res) => {
   if (!requireAuth(req, res, ['admin', 'supervisor', 'vendedor'])) return;
   const row = db.prepare('SELECT value FROM meta WHERE key = ?').get('sup_ref_json');
@@ -746,7 +760,7 @@ route('POST', '/api/referencia/supervisores', async (req, res) => {
   db.prepare('INSERT OR REPLACE INTO meta (key, value) VALUES (?,?)').run('sup_ref_json', JSON.stringify(body.mapping));
   sendJson(res, 200, { ok: true, cantidad: Object.keys(body.mapping).length });
 });
- 
+
 route('GET', '/api/ranking/clientes-categoria', async (req, res) => {
   if (!requireAuth(req, res, ['admin', 'supervisor', 'vendedor'])) return;
   const parsed = url.parse(req.url, true);
@@ -770,7 +784,7 @@ route('GET', '/api/ranking/clientes-categoria', async (req, res) => {
     hl: Math.round(r.hl * 1000) / 1000,
   })));
 });
- 
+
 route('GET', '/api/compradores', async (req, res) => {
   if (!requireAuth(req, res, ['admin', 'supervisor', 'vendedor'])) return;
   const parsed = url.parse(req.url, true);
@@ -794,7 +808,183 @@ route('GET', '/api/compradores', async (req, res) => {
   `).all(mes, anio, ...params);
   sendJson(res, 200, { categorias: resultado, total: totalRows.length });
 });
- 
+
+function periodoMesAnterior(mes, anio) {
+  let mesAnteriorNum = mes - 1, anioMesAnterior = anio;
+  if (mesAnteriorNum < 1) { mesAnteriorNum = 12; anioMesAnterior = anio - 1; }
+  return { mesAnteriorNum, anioMesAnterior };
+}
+
+route('GET', '/api/canal', async (req, res) => {
+  if (!requireAuth(req, res, ['admin', 'supervisor', 'vendedor'])) return;
+  const parsed = url.parse(req.url, true);
+  const mes = Number(parsed.query.mes);
+  const anio = Number(parsed.query.anio);
+  if (!mes || !anio) return sendJson(res, 400, { error: 'Faltan parametros mes y anio' });
+  const { clause, params, join } = buildFiltros(parsed.query);
+  const { mesAnteriorNum, anioMesAnterior } = periodoMesAnterior(mes, anio);
+  const CATS = ['Cervezas', 'Aguas', 'Vinos', 'Sidras'];
+
+  function volumenPorCanal(mesQ, anioQ) {
+    const rows = db.prepare(`
+      SELECT v.canal as canal, v.categoria as categoria, SUM(v.um_hl) as hl
+      FROM ventas v ${join}
+      WHERE v.mes = ? AND v.anio = ?${clause}
+      GROUP BY v.canal, v.categoria
+    `).all(mesQ, anioQ, ...params);
+    const out = {};
+    for (const r of rows) {
+      const canal = r.canal || 'SIN CANAL';
+      if (!out[canal]) out[canal] = {};
+      out[canal][r.categoria] = r.hl || 0;
+    }
+    return out;
+  }
+
+  const actualData = volumenPorCanal(mes, anio);
+  const anioAnteriorData = volumenPorCanal(mes, anio - 1);
+  const mesAnteriorData = volumenPorCanal(mesAnteriorNum, anioMesAnterior);
+  const canales = Array.from(new Set([
+    ...Object.keys(actualData), ...Object.keys(anioAnteriorData), ...Object.keys(mesAnteriorData),
+  ])).sort();
+
+  const r3 = (n) => Math.round((n || 0) * 1000) / 1000;
+  function armarFila(canal) {
+    const categorias = {};
+    let tA = 0, tAA = 0, tMA = 0;
+    for (const cat of CATS) {
+      const a = (actualData[canal] && actualData[canal][cat]) || 0;
+      const aa = (anioAnteriorData[canal] && anioAnteriorData[canal][cat]) || 0;
+      const ma = (mesAnteriorData[canal] && mesAnteriorData[canal][cat]) || 0;
+      categorias[cat] = { actual: r3(a), anio_anterior: r3(aa), mes_anterior: r3(ma) };
+      tA += a; tAA += aa; tMA += ma;
+    }
+    return { canal, categorias, total: { actual: r3(tA), anio_anterior: r3(tAA), mes_anterior: r3(tMA) } };
+  }
+
+  const filas = canales.map(armarFila);
+  const totalGeneral = { categorias: {}, total: { actual: 0, anio_anterior: 0, mes_anterior: 0 } };
+  for (const cat of CATS) {
+    let a = 0, aa = 0, ma = 0;
+    for (const f of filas) { a += f.categorias[cat].actual; aa += f.categorias[cat].anio_anterior; ma += f.categorias[cat].mes_anterior; }
+    totalGeneral.categorias[cat] = { actual: r3(a), anio_anterior: r3(aa), mes_anterior: r3(ma) };
+    totalGeneral.total.actual += a; totalGeneral.total.anio_anterior += aa; totalGeneral.total.mes_anterior += ma;
+  }
+  totalGeneral.total = { actual: r3(totalGeneral.total.actual), anio_anterior: r3(totalGeneral.total.anio_anterior), mes_anterior: r3(totalGeneral.total.mes_anterior) };
+
+  sendJson(res, 200, {
+    mes, anio, mes_anterior_num: mesAnteriorNum, anio_mes_anterior: anioMesAnterior,
+    filas, total_general: totalGeneral,
+  });
+});
+
+route('GET', '/api/canal-compradores', async (req, res) => {
+  if (!requireAuth(req, res, ['admin', 'supervisor', 'vendedor'])) return;
+  const parsed = url.parse(req.url, true);
+  const mes = Number(parsed.query.mes);
+  const anio = Number(parsed.query.anio);
+  if (!mes || !anio) return sendJson(res, 400, { error: 'Faltan parametros mes y anio' });
+  const { clause, params, join } = buildFiltros(parsed.query);
+  const { mesAnteriorNum, anioMesAnterior } = periodoMesAnterior(mes, anio);
+  const CATS = ['Cervezas', 'Aguas', 'Vinos', 'Sidras'];
+
+  function compradoresPorCanal(mesQ, anioQ) {
+    const rows = db.prepare(`
+      SELECT canal, categoria, COUNT(*) as n FROM (
+        SELECT v.canal as canal, v.categoria as categoria, v.cliente_id as cliente_id, SUM(v.um_hl) as hl
+        FROM ventas v ${join}
+        WHERE v.mes = ? AND v.anio = ?${clause}
+        GROUP BY v.canal, v.categoria, v.cliente_id
+        HAVING SUM(v.um_hl) >= 0.001
+      ) GROUP BY canal, categoria
+    `).all(mesQ, anioQ, ...params);
+    const porCat = {};
+    for (const r of rows) {
+      const canal = r.canal || 'SIN CANAL';
+      if (!porCat[canal]) porCat[canal] = {};
+      porCat[canal][r.categoria] = r.n;
+    }
+    const totalRows = db.prepare(`
+      SELECT canal, COUNT(DISTINCT cliente_id) as n FROM ventas v ${join}
+      WHERE v.mes = ? AND v.anio = ?${clause}
+      GROUP BY v.canal
+    `).all(mesQ, anioQ, ...params);
+    const totales = {};
+    for (const r of totalRows) totales[r.canal || 'SIN CANAL'] = r.n;
+    return { porCat, totales };
+  }
+
+  function totalPorCategoria(mesQ, anioQ) {
+    const rows = db.prepare(`
+      SELECT categoria, COUNT(*) as n FROM (
+        SELECT v.categoria as categoria, v.cliente_id as cliente_id, SUM(v.um_hl) as hl
+        FROM ventas v ${join}
+        WHERE v.mes = ? AND v.anio = ?${clause}
+        GROUP BY v.categoria, v.cliente_id
+        HAVING SUM(v.um_hl) >= 0.001
+      ) GROUP BY categoria
+    `).all(mesQ, anioQ, ...params);
+    const out = {};
+    for (const r of rows) out[r.categoria] = r.n;
+    return out;
+  }
+  function totalGeneralClientes(mesQ, anioQ) {
+    const row = db.prepare(`SELECT COUNT(DISTINCT cliente_id) as n FROM ventas v ${join} WHERE v.mes = ? AND v.anio = ?${clause}`).get(mesQ, anioQ, ...params);
+    return row.n || 0;
+  }
+
+  const actualData = compradoresPorCanal(mes, anio);
+  const anioAnteriorData = compradoresPorCanal(mes, anio - 1);
+  const mesAnteriorData = compradoresPorCanal(mesAnteriorNum, anioMesAnterior);
+  const canales = Array.from(new Set([
+    ...Object.keys(actualData.totales), ...Object.keys(anioAnteriorData.totales), ...Object.keys(mesAnteriorData.totales),
+  ])).sort();
+
+  function armarFila(canal) {
+    const categorias = {};
+    for (const cat of CATS) {
+      categorias[cat] = {
+        actual: (actualData.porCat[canal] && actualData.porCat[canal][cat]) || 0,
+        anio_anterior: (anioAnteriorData.porCat[canal] && anioAnteriorData.porCat[canal][cat]) || 0,
+        mes_anterior: (mesAnteriorData.porCat[canal] && mesAnteriorData.porCat[canal][cat]) || 0,
+      };
+    }
+    return {
+      canal, categorias,
+      total: {
+        actual: actualData.totales[canal] || 0,
+        anio_anterior: anioAnteriorData.totales[canal] || 0,
+        mes_anterior: mesAnteriorData.totales[canal] || 0,
+      },
+    };
+  }
+
+  const filas = canales.map(armarFila);
+  const totalCatActual = totalPorCategoria(mes, anio);
+  const totalCatAnioAnt = totalPorCategoria(mes, anio - 1);
+  const totalCatMesAnt = totalPorCategoria(mesAnteriorNum, anioMesAnterior);
+  const totalGeneral = {
+    categorias: {},
+    total: {
+      actual: totalGeneralClientes(mes, anio),
+      anio_anterior: totalGeneralClientes(mes, anio - 1),
+      mes_anterior: totalGeneralClientes(mesAnteriorNum, anioMesAnterior),
+    },
+  };
+  for (const cat of CATS) {
+    totalGeneral.categorias[cat] = {
+      actual: totalCatActual[cat] || 0,
+      anio_anterior: totalCatAnioAnt[cat] || 0,
+      mes_anterior: totalCatMesAnt[cat] || 0,
+    };
+  }
+
+  sendJson(res, 200, {
+    mes, anio, mes_anterior_num: mesAnteriorNum, anio_mes_anterior: anioMesAnterior,
+    filas, total_general: totalGeneral,
+  });
+});
+
 const MIME = {
   '.html': 'text/html; charset=utf-8',
   '.js': 'application/javascript; charset=utf-8',
