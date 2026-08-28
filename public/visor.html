@@ -115,52 +115,61 @@
   <div class="topbar">
     <div class="brand">SUR <span>DORADO</span> · Visor Comercial</div>
     <div>
-      <button id="tabBtnPanel" onclick="showTab('panel')" style="background:rgba(255,255,255,.15); margin-right:6px;">Panel</button>
+      <button id="tabBtnVolumen" onclick="showTab('volumen')" style="background:rgba(255,255,255,.15); margin-right:6px;">Volumen</button>
+      <button id="tabBtnCompradores" onclick="showTab('compradores')" style="margin-right:6px;">Compradores</button>
       <button id="tabBtnConfig" onclick="showTab('config')" style="margin-right:14px;">Configuración</button>
       <span id="userLabel" style="margin-right:14px; font-size:13px; color:#ddd;"></span>
       <button onclick="doLogout()">Salir</button>
     </div>
   </div>
   <div class="wrap">
-      <div id="tabPanel">
 
-    <div class="periodo">
-      <span>Periodo:</span>
-      <select id="mesInput">
-        <option value="1">Enero</option>
-        <option value="2">Febrero</option>
-        <option value="3">Marzo</option>
-        <option value="4">Abril</option>
-        <option value="5">Mayo</option>
-        <option value="6">Junio</option>
-        <option value="7">Julio</option>
-        <option value="8">Agosto</option>
-        <option value="9">Septiembre</option>
-        <option value="10">Octubre</option>
-        <option value="11">Noviembre</option>
-        <option value="12">Diciembre</option>
-      </select>
-      <input id="anioInput" type="number" placeholder="Año" style="width:70px;">
-      <button onclick="loadKpis()">Ver</button>
-      <span id="periodoNote" style="font-size:12px;"></span>
+    <div id="periodoFiltrosWrap">
+      <div class="periodo">
+        <span>Periodo:</span>
+        <select id="mesInput">
+          <option value="1">Enero</option>
+          <option value="2">Febrero</option>
+          <option value="3">Marzo</option>
+          <option value="4">Abril</option>
+          <option value="5">Mayo</option>
+          <option value="6">Junio</option>
+          <option value="7">Julio</option>
+          <option value="8">Agosto</option>
+          <option value="9">Septiembre</option>
+          <option value="10">Octubre</option>
+          <option value="11">Noviembre</option>
+          <option value="12">Diciembre</option>
+        </select>
+        <input id="anioInput" type="number" placeholder="Año" style="width:70px;">
+        <button onclick="loadKpis()">Ver</button>
+        <span id="periodoNote" style="font-size:12px;"></span>
+      </div>
+
+      <div class="periodo" id="filtrosArea">
+        <span>Filtros:</span>
+        <select id="filtroSupervisor" onchange="loadKpis()"><option value="">Supervisor (todos)</option></select>
+        <select id="filtroVendedor" onchange="loadKpis()"><option value="">Vendedor (todos)</option></select>
+        <select id="filtroDia" onchange="loadKpis()"><option value="">Día (todos)</option></select>
+        <select id="filtroCamionero" onchange="loadKpis()"><option value="">Camionero (todos)</option></select>
+        <button onclick="limpiarFiltros()" style="background:transparent; border:1px solid var(--border); color:var(--text2);">Limpiar</button>
+      </div>
     </div>
 
-    <div class="periodo" id="filtrosArea">
-      <span>Filtros:</span>
-      <select id="filtroSupervisor" onchange="loadKpis()"><option value="">Supervisor (todos)</option></select>
-      <select id="filtroVendedor" onchange="loadKpis()"><option value="">Vendedor (todos)</option></select>
-      <select id="filtroDia" onchange="loadKpis()"><option value="">Día (todos)</option></select>
-      <select id="filtroCamionero" onchange="loadKpis()"><option value="">Camionero (todos)</option></select>
-      <button onclick="limpiarFiltros()" style="background:transparent; border:1px solid var(--border); color:var(--text2);">Limpiar</button>
-    </div>
+    <div id="tabVolumen">
 
     <div id="kpiArea">
       <div class="loading">Cargando datos...</div>
     </div>
 
-    <div class="section" id="compradoresSection">
-      <h2>Compradores por categoría</h2>
-      <div id="compradoresArea"><div class="loading">Cargando...</div></div>
+    <div class="section">
+      <h2>Volumen por canal</h2>
+      <div style="overflow-x:auto;">
+        <table style="width:100%; border-collapse:collapse; font-size:12px; white-space:nowrap;" id="canalVolumenTable">
+          <thead></thead>
+          <tbody><tr><td style="padding:10px;">Cargando...</td></tr></tbody>
+        </table>
+      </div>
     </div>
 
     <div class="section">
@@ -191,6 +200,25 @@
             </tr>
           </thead>
           <tbody id="drillDownBody"></tbody>
+        </table>
+      </div>
+    </div>
+
+    </div>
+
+    <div id="tabCompradores" class="hidden">
+
+    <div class="section" id="compradoresSection">
+      <h2>Compradores por categoría</h2>
+      <div id="compradoresArea"><div class="loading">Cargando...</div></div>
+    </div>
+
+    <div class="section">
+      <h2>Compradores por canal</h2>
+      <div style="overflow-x:auto;">
+        <table style="width:100%; border-collapse:collapse; font-size:12px; white-space:nowrap;" id="canalCompradoresTable">
+          <thead></thead>
+          <tbody><tr><td style="padding:10px;">Cargando...</td></tr></tbody>
         </table>
       </div>
     </div>
@@ -227,7 +255,7 @@
       </div>
     </div>
 
-  </div>
+    </div>
 
   <div id="tabConfig" class="hidden">
 
@@ -238,7 +266,7 @@
         <button onclick="procesarVentasHoy()">Procesar y subir</button>
       </div>
       <div id="uploadVentasMsg" class="msg"></div>
-      <p class="note">El archivo debe tener las columnas: Descripción DIVISION, Descripción MARCA, Cliente, Descripcion Vendedor, Descripcion Supervisor, Impositivo, UM Total, Anulado, Fecha Comprobante, Descripcion Transporte, Descripcion de Articulo. Se procesa directo en el servidor, admite archivos grandes.</p>
+      <p class="note">El archivo debe tener las columnas: Descripción DIVISION, Descripción MARCA, Cliente, Descripcion Vendedor, Descripcion Supervisor, Impositivo, UM Total, Anulado, Fecha Comprobante, Descripcion Transporte, Descripcion de Articulo, Descripcion Subcanal MKT. Se procesa directo en el servidor, admite archivos grandes.</p>
     </div>
 
     <div class="section" id="adminSupRefSection" style="display:none;">
@@ -300,6 +328,7 @@ async function doLogin(){
       document.getElementById('adminConfigSection').style.display = 'block';
       document.getElementById('adminSupRefSection').style.display = 'block';
     }
+    showTab('volumen');
     await initPeriodoYKpis();
     loadFiltrosOpciones();
     if(ROLE === 'admin') loadDiasConfig();
@@ -309,9 +338,12 @@ async function doLogin(){
 }
 
 function showTab(tab){
-  document.getElementById('tabPanel').classList.toggle('hidden', tab !== 'panel');
+  document.getElementById('periodoFiltrosWrap').classList.toggle('hidden', tab === 'config');
+  document.getElementById('tabVolumen').classList.toggle('hidden', tab !== 'volumen');
+  document.getElementById('tabCompradores').classList.toggle('hidden', tab !== 'compradores');
   document.getElementById('tabConfig').classList.toggle('hidden', tab !== 'config');
-  document.getElementById('tabBtnPanel').style.background = tab === 'panel' ? 'rgba(255,255,255,.15)' : 'transparent';
+  document.getElementById('tabBtnVolumen').style.background = tab === 'volumen' ? 'rgba(255,255,255,.15)' : 'transparent';
+  document.getElementById('tabBtnCompradores').style.background = tab === 'compradores' ? 'rgba(255,255,255,.15)' : 'transparent';
   document.getElementById('tabBtnConfig').style.background = tab === 'config' ? 'rgba(255,255,255,.15)' : 'transparent';
 }
 
@@ -357,6 +389,8 @@ async function loadKpis(){
     loadRankingMarcas();
     loadCompradores();
     loadTopClientesCategoria();
+    loadCanalVolumen();
+    loadCanalCompradores();
   }catch(e){
     document.getElementById('kpiArea').innerHTML = '<div class="loading">Error: ' + e.message + '</div>';
   }
@@ -365,6 +399,94 @@ async function loadKpis(){
 function fmtHL(n){
   if(n === null || n === undefined) return '-';
   return n.toLocaleString('es-AR', {minimumFractionDigits:2, maximumFractionDigits:2}) + ' HL';
+}
+function fmtNum(n){
+  if(n === null || n === undefined) return '-';
+  return n.toLocaleString('es-AR', {minimumFractionDigits:2, maximumFractionDigits:2});
+}
+function fmtInt(n){
+  if(n === null || n === undefined) return '-';
+  return n.toLocaleString('es-AR');
+}
+
+// Tabla compartida por "Volumen por canal" y "Compradores por canal": filas =
+// canales, columnas = cada categoria (Actual / mismo mes año pasado / mes
+// pasado) mas una columna Total que suma las categorias. data viene de
+// /api/canal o /api/canal-compradores, con la misma forma en ambos casos.
+function renderCanalTable(tableId, data, fmtFn, unitLabel){
+  const table = document.getElementById(tableId);
+  const CATS = ['Cervezas','Aguas','Vinos','Sidras'];
+  const labelActual = 'Actual';
+  const labelAnioAnt = NOMBRES_MES[data.mes] + ' ' + (data.anio - 1);
+  const labelMesAnt = NOMBRES_MES[data.mes_anterior_num] + ' ' + data.anio_mes_anterior;
+  const grupos = [...CATS, 'Total'];
+
+  let thead = '<tr><th style="padding:6px; text-align:left; border-bottom:1px solid var(--border);">Canal</th>';
+  for(const g of grupos){
+    thead += `<th colspan="3" style="padding:6px; text-align:center; border-bottom:1px solid var(--border); border-left:1px solid var(--border); color:var(--dorado);">${g}${unitLabel ? ' ('+unitLabel+')' : ''}</th>`;
+  }
+  thead += '</tr><tr><th style="padding:4px;"></th>';
+  for(let i=0;i<grupos.length;i++){
+    thead += `<th style="padding:4px; text-align:right; border-left:1px solid var(--border); color:var(--text2); font-weight:600;">${labelActual}</th>`;
+    thead += `<th style="padding:4px; text-align:right; color:var(--text2); font-weight:600;">${labelAnioAnt}</th>`;
+    thead += `<th style="padding:4px; text-align:right; color:var(--text2); font-weight:600;">${labelMesAnt}</th>`;
+  }
+  thead += '</tr>';
+  table.querySelector('thead').innerHTML = thead;
+
+  function fila(nombre, filaData, negrita){
+    const style = negrita ? 'font-weight:700; border-top:2px solid var(--border);' : 'border-top:1px solid var(--border);';
+    let html = `<tr style="${style}"><td style="padding:6px;">${nombre}</td>`;
+    for(const cat of CATS){
+      const c = filaData.categorias[cat] || {actual:0, anio_anterior:0, mes_anterior:0};
+      html += `<td style="padding:6px; text-align:right; border-left:1px solid var(--border);">${fmtFn(c.actual)}</td>`;
+      html += `<td style="padding:6px; text-align:right; color:var(--text2);">${fmtFn(c.anio_anterior)}</td>`;
+      html += `<td style="padding:6px; text-align:right; color:var(--text2);">${fmtFn(c.mes_anterior)}</td>`;
+    }
+    const t = filaData.total;
+    html += `<td style="padding:6px; text-align:right; border-left:1px solid var(--border); font-weight:700;">${fmtFn(t.actual)}</td>`;
+    html += `<td style="padding:6px; text-align:right; color:var(--text2); font-weight:700;">${fmtFn(t.anio_anterior)}</td>`;
+    html += `<td style="padding:6px; text-align:right; color:var(--text2); font-weight:700;">${fmtFn(t.mes_anterior)}</td>`;
+    html += '</tr>';
+    return html;
+  }
+
+  let tbody = '';
+  if(!data.filas.length){
+    tbody = `<tr><td colspan="${1 + grupos.length*3}" style="padding:10px;">Sin datos para este período.</td></tr>`;
+  } else {
+    for(const f of data.filas) tbody += fila(f.canal, f, false);
+    tbody += fila('Total general', data.total_general, true);
+  }
+  table.querySelector('tbody').innerHTML = tbody;
+}
+
+async function loadCanalVolumen(){
+  if(!CURRENT_MES || !CURRENT_ANIO) return;
+  const table = document.getElementById('canalVolumenTable');
+  table.querySelector('tbody').innerHTML = '<tr><td style="padding:10px;">Cargando...</td></tr>';
+  try{
+    const res = await fetch(API + `/api/canal?mes=${CURRENT_MES}&anio=${CURRENT_ANIO}${filtrosQueryString()}`, {headers: authHeaders()});
+    const data = await res.json();
+    if(!res.ok){ table.querySelector('tbody').innerHTML = `<tr><td style="padding:10px;">${data.error||'Error'}</td></tr>`; return; }
+    renderCanalTable('canalVolumenTable', data, fmtNum, 'HL');
+  }catch(e){
+    table.querySelector('tbody').innerHTML = `<tr><td style="padding:10px;">Error: ${e.message}</td></tr>`;
+  }
+}
+
+async function loadCanalCompradores(){
+  if(!CURRENT_MES || !CURRENT_ANIO) return;
+  const table = document.getElementById('canalCompradoresTable');
+  table.querySelector('tbody').innerHTML = '<tr><td style="padding:10px;">Cargando...</td></tr>';
+  try{
+    const res = await fetch(API + `/api/canal-compradores?mes=${CURRENT_MES}&anio=${CURRENT_ANIO}${filtrosQueryString()}`, {headers: authHeaders()});
+    const data = await res.json();
+    if(!res.ok){ table.querySelector('tbody').innerHTML = `<tr><td style="padding:10px;">${data.error||'Error'}</td></tr>`; return; }
+    renderCanalTable('canalCompradoresTable', data, fmtInt, 'clientes');
+  }catch(e){
+    table.querySelector('tbody').innerHTML = `<tr><td style="padding:10px;">Error: ${e.message}</td></tr>`;
+  }
 }
 
 function renderKpis(data){
@@ -379,14 +501,22 @@ function renderKpis(data){
       badgeClass = varPct >= 0 ? 'up' : 'down';
       badgeText = (varPct >= 0 ? '+' : '') + varPct + '% vs ' + (data.anio-1);
     }
+    const varMesPct = k.variacion_mes_pct;
+    let badgeClassMes = 'neutral', badgeTextMes = 'Sin dato mes anterior';
+    if(varMesPct !== null && varMesPct !== undefined){
+      badgeClassMes = varMesPct >= 0 ? 'up' : 'down';
+      badgeTextMes = (varMesPct >= 0 ? '+' : '') + varMesPct + '% vs mes anterior';
+    }
     html += `
       <div class="kpi-card">
         <h3>${cat}</h3>
         <div class="kpi-main">${fmtHL(k.actual)}</div>
         <div class="kpi-sub">Acumulado ${NOMBRES_MES[data.mes]} ${data.anio}</div>
         <div class="kpi-row"><span>Proyectado</span><span>${k.proyectado !== null ? fmtHL(k.proyectado) : 'Cargar dias configurados'}</span></div>
+        <div class="kpi-row"><span>${NOMBRES_MES[data.mes_anterior_num]} ${data.anio_mes_anterior}</span><span>${fmtHL(k.mes_anterior)}</span></div>
+        <div class="kpi-row"><span>Variación vs mes anterior</span><span class="badge ${badgeClassMes}">${badgeTextMes}</span></div>
         <div class="kpi-row"><span>${NOMBRES_MES[data.mes]} ${data.anio-1}</span><span>${fmtHL(k.anio_anterior)}</span></div>
-        <div class="kpi-row"><span>Variación</span><span class="badge ${badgeClass}">${badgeText}</span></div>
+        <div class="kpi-row"><span>Variación vs año anterior</span><span class="badge ${badgeClass}">${badgeText}</span></div>
       </div>
     `;
   }
@@ -538,171 +668,4 @@ async function procesarSupRef(){
     const header = rows[0];
     const vIdx = findColIndex(header, 'VENDEDOR');
     const sIdx = findColIndex(header, 'SUPERVISOR');
-    if(vIdx < 0 || sIdx < 0) throw new Error('Faltan las columnas VENDEDOR / SUPERVISOR');
-    const mapping = {};
-    for(let r=1;r<rows.length;r++){
-      const row = rows[r];
-      if(!row || !row[vIdx]) continue;
-      mapping[normName(row[vIdx])] = (row[sIdx]||'SIN SUPERVISOR').toString().trim();
-    }
-    const res = await fetch(API + '/api/referencia/supervisores', {
-      method: 'POST', headers: {'Content-Type':'application/json', ...authHeaders()},
-      body: JSON.stringify({mapping})
-    });
-    const data = await res.json();
-    if(!res.ok){ showMsg('supRefMsg', data.error || 'Error', false); return; }
-    showMsg('supRefMsg', `Mapeo actualizado: ${data.cantidad} vendedores`, true);
-  }catch(e){
-    showMsg('supRefMsg', 'Error: ' + e.message, false);
-  }
-}
-
-// Se sube por partes (por si el archivo es grande) y el servidor lo procesa
-// con un lector en streaming (fila por fila, sin cargar el archivo entero en
-// memoria), asi que el tamaño del archivo no importa. Como el procesamiento
-// puede tardar, el servidor responde enseguida y esta funcion consulta el
-// estado hasta que termina, en vez de esperar la respuesta original.
-async function procesarVentasHoy(){
-  const file = document.getElementById('fileVentasHoy').files[0];
-  if(!file){ showMsg('uploadVentasMsg', 'Elegí un archivo', false); return; }
-  const CHUNK_SIZE = 4 * 1024 * 1024; // 4MB por pedazo
-  try{
-    showMsg('uploadVentasMsg', 'Iniciando subida...', true);
-    const startRes = await fetch(API + '/api/upload-excel/start', { method: 'POST', headers: authHeaders() });
-    const startData = await startRes.json();
-    if(!startRes.ok){ showMsg('uploadVentasMsg', startData.error || 'Error iniciando subida', false); return; }
-    const uploadId = startData.uploadId;
-
-    const totalPartes = Math.ceil(file.size / CHUNK_SIZE);
-    for(let i = 0; i < totalPartes; i++){
-      const start = i * CHUNK_SIZE;
-      const end = Math.min(start + CHUNK_SIZE, file.size);
-      const chunk = file.slice(start, end);
-      showMsg('uploadVentasMsg', `Subiendo parte ${i+1} de ${totalPartes}...`, true);
-      const chunkRes = await fetch(API + '/api/upload-excel/chunk?uploadId=' + encodeURIComponent(uploadId), {
-        method: 'POST',
-        headers: {'Content-Type':'application/octet-stream', ...authHeaders()},
-        body: chunk
-      });
-      const chunkData = await chunkRes.json();
-      if(!chunkRes.ok){ showMsg('uploadVentasMsg', chunkData.error || `Error subiendo parte ${i+1}`, false); return; }
-    }
-
-    showMsg('uploadVentasMsg', 'Todas las partes subidas. Procesando en el servidor (puede tardar varios minutos)...', true);
-    const finishRes = await fetch(API + '/api/upload-excel/finish?uploadId=' + encodeURIComponent(uploadId), {
-      method: 'POST', headers: authHeaders()
-    });
-    const finishData = await finishRes.json();
-    if(!finishRes.ok){ showMsg('uploadVentasMsg', finishData.error || 'Error procesando', false); return; }
-
-    while(true){
-      await new Promise(r => setTimeout(r, 3000));
-      const statusRes = await fetch(API + '/api/upload-excel/status?uploadId=' + encodeURIComponent(uploadId), { headers: authHeaders() });
-      const data = await statusRes.json();
-      if(!statusRes.ok){ showMsg('uploadVentasMsg', data.error || 'Error procesando', false); return; }
-      if(data.status === 'procesando') continue;
-      showMsg('uploadVentasMsg', `Listo. ${data.mes_actual}: ${data.ventas} filas guardadas.`, true);
-      loadKpis();
-      return;
-    }
-  }catch(e){
-    showMsg('uploadVentasMsg', 'Error: ' + e.message, false);
-  }
-}
-
-async function loadCompradores(){
-  if(!CURRENT_MES || !CURRENT_ANIO) return;
-  const area = document.getElementById('compradoresArea');
-  area.innerHTML = '<div class="loading">Cargando...</div>';
-  try{
-    const res = await fetch(API + `/api/compradores?mes=${CURRENT_MES}&anio=${CURRENT_ANIO}${filtrosQueryString()}`, {headers: authHeaders()});
-    const data = await res.json();
-    if(!res.ok){ area.innerHTML = '<div class="loading">' + (data.error||'Error') + '</div>'; return; }
-    const cats = ['Cervezas','Aguas','Vinos','Sidras'];
-    const max = Math.max(data.total, 1);
-    let html = '';
-    for(const cat of cats){
-      const n = data.categorias[cat] || 0;
-      const pct = max > 0 ? (n / max * 100) : 0;
-      html += `
-        <div style="margin-bottom:10px;">
-          <div style="display:flex; justify-content:space-between; font-size:13px; margin-bottom:3px;">
-            <span>${cat}</span><span style="color:var(--text2);">${n} clientes</span>
-          </div>
-          <div style="background:var(--card2); border-radius:4px; height:10px; overflow:hidden;">
-            <div style="background:var(--dorado); height:100%; width:${pct}%;"></div>
-          </div>
-        </div>
-      `;
-    }
-    html += `<p class="note">Total de clientes compradores (cualquier categoría): <strong>${data.total}</strong></p>`;
-    area.innerHTML = html;
-  }catch(e){
-    area.innerHTML = '<div class="loading">Error: ' + e.message + '</div>';
-  }
-}
-
-let TOP_CLIENTES_CATEGORIA = [];
-async function loadTopClientesCategoria(){
-  if(!CURRENT_MES || !CURRENT_ANIO) return;
-  const categoria = document.getElementById('catTopClientesSelect').value;
-  const limit = document.getElementById('limitTopClientesSelect').value;
-  const body = document.getElementById('topClientesBody');
-  body.innerHTML = '<tr><td colspan="4" style="padding:10px;">Cargando...</td></tr>';
-  try{
-    const res = await fetch(API + `/api/ranking/clientes-categoria?mes=${CURRENT_MES}&anio=${CURRENT_ANIO}&categoria=${encodeURIComponent(categoria)}&limit=${limit}${filtrosQueryString()}`, {headers: authHeaders()});
-    const rows = await res.json();
-    if(!res.ok){ body.innerHTML = '<tr><td colspan="4">' + (rows.error||'Error') + '</td></tr>'; return; }
-    TOP_CLIENTES_CATEGORIA = rows;
-    if(!rows.length){ body.innerHTML = '<tr><td colspan="4" style="padding:10px;">Sin datos para esta categoría en este período.</td></tr>'; return; }
-    body.innerHTML = rows.map(r => `
-      <tr style="border-bottom:1px solid var(--border);">
-        <td style="padding:6px;">${r.cliente_id}</td>
-        <td style="padding:6px;">${r.razon_social}</td>
-        <td style="padding:6px;">${r.domicilio}</td>
-        <td style="padding:6px; text-align:right;">${fmtHL(r.hl)}</td>
-      </tr>
-    `).join('');
-  }catch(e){
-    body.innerHTML = '<tr><td colspan="4">Error: ' + e.message + '</td></tr>';
-  }
-}
-
-function exportarTopClientesExcel(){
-  if(!TOP_CLIENTES_CATEGORIA.length){ alert('No hay datos para exportar.'); return; }
-  const data = TOP_CLIENTES_CATEGORIA.map(r => ({
-    'Código': r.cliente_id, 'Razón social': r.razon_social, 'Domicilio': r.domicilio, 'HL': r.hl,
-  }));
-  const ws = XLSX.utils.json_to_sheet(data);
-  const wb = XLSX.utils.book_new();
-  XLSX.utils.book_append_sheet(wb, ws, 'Top Clientes');
-  XLSX.writeFile(wb, 'top_clientes_categoria.xlsx');
-}
-
-async function loadDiasConfig(){
-  try{
-    const res = await fetch(API + '/api/config/dias', {headers: authHeaders()});
-    const data = await res.json();
-    if(data.dias_configurados) document.getElementById('diasConfigInput').value = data.dias_configurados;
-  }catch(e){}
-}
-
-async function saveDiasConfig(){
-  const dias = Number(document.getElementById('diasConfigInput').value);
-  if(!dias){ showMsg('diasConfigMsg', 'Ingresa un numero valido', false); return; }
-  try{
-    const res = await fetch(API + '/api/config/dias', {
-      method: 'POST', headers: {'Content-Type':'application/json', ...authHeaders()},
-      body: JSON.stringify({dias})
-    });
-    const data = await res.json();
-    if(!res.ok){ showMsg('diasConfigMsg', data.error || 'Error', false); return; }
-    showMsg('diasConfigMsg', 'Guardado correctamente', true);
-    loadKpis();
-  }catch(e){
-    showMsg('diasConfigMsg', 'Error: ' + e.message, false);
-  }
-}
-</script>
-</body>
-</html>
+    if(vIdx < 0 || sIdx <
