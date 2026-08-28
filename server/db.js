@@ -49,6 +49,7 @@ const columnasNuevas = [
   { nombre: 'tipo_documento', tipo: 'TEXT' },
   { nombre: 'mes', tipo: 'INTEGER' },
   { nombre: 'anio', tipo: 'INTEGER' },
+  { nombre: 'canal', tipo: 'TEXT' },
 ];
 for (const col of columnasNuevas) {
   try {
@@ -60,6 +61,7 @@ for (const col of columnasNuevas) {
 db.exec(`
   CREATE INDEX IF NOT EXISTS idx_ventas_periodo ON ventas(anio, mes);
   CREATE INDEX IF NOT EXISTS idx_ventas_supervisor ON ventas(supervisor);
+  CREATE INDEX IF NOT EXISTS idx_ventas_canal ON ventas(canal);
 `);
 
 module.exports = db;
