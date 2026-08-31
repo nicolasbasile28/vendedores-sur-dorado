@@ -1,4 +1,4 @@
-
+S
 // server.js - Servidor HTTP principal
 const http = require('http');
 const fs = require('fs');
@@ -983,6 +983,152 @@ route('GET', '/api/canal-compradores', async (req, res) => {
   sendJson(res, 200, {
     mes, anio, mes_anterior_num: mesAnteriorNum, anio_mes_anterior: anioMesAnterior,
     filas, total_general: totalGeneral,
+  });
+});
+ 
+// Volumen (HL) por marca y canal, para UNA categoria a la vez (Cervezas, Aguas,
+// Vinos o Sidras). Misma logica que /api/canal pero agrupando por v.marca en
+// vez de v.categoria, y los "grupos" de columnas son los canales (dinamicos,
+// se descubren con SELECT DISTINCT en vez de estar hardcodeados).
+route('GET', '/api/marca-canal', async (req, res) => {
+  if (!requireAuth(req, res, ['admin', 'supervisor', 'vendedor'])) return;
+  const parsed = url.parse(req.url, true);
+  const mes = Number(parsed.query.mes);
+  const anio = Number(parsed.query.anio);
+  const categoria = parsed.query.categoria || '';
+  if (!mes || !anio || !categoria) return sendJson(res, 400, { error: 'Faltan parametros mes, anio y categoria' });
+  const { clause, params, join } = buildFiltros(parsed.query);
+  const { mesAnteriorNum, anioMesAnterior } = periodoMesAnterior(mes, anio);
+ 
+  function volumenPorMarca(mesQ, anioQ) {
+    const rows = db.prepare(`
+      SELECT v.marca as marca, v.canal as canal, SUM(v.um_hl) as hl
+      FROM ventas v ${join}
+      WHERE v.categoria = ? AND v.mes = ? AND v.anio = ?${clause}
+      GROUP BY v.marca, v.canal
+    `).all(categoria, mesQ, anioQ, ...params);
+    const out = {};
+    for (const r of rows) {
+      const marca = r.marca || 'SIN MARCA';
+      const canal = r.canal || 'SIN CANAL';
+      if (!out[marca]) out[marca] = {};
+      out[marca][canal] = r.hl || 0;
+    }
+    return out;
+  }
+ 
+  const actualData = volumenPorMarca(mes, anio);
+  const anioAnteriorData = volumenPorMarca(mes, anio - 1);
+  const mesAnteriorData = volumenPorMarca(mesAnteriorNum, anioMesAnterior);
+  const marcas = Array.from(new Set([
+    ...Object.keys(actualData), ...Object.keys(anioAnteriorData), ...Object.keys(mesAnteriorData),
+  ])).sort();
+  const canales = Array.from(new Set([
+    ...Object.values(actualData).flatMap(o => Object.keys(o)),
+    ...Object.values(anioAnteriorData).flatMap(o => Object.keys(o)),
+    ...Object.values(mesAnteriorData).flatMap(o => Object.keys(o)),
+  ])).sort();
+ 
+  const r3 = (n) => Math.round((n || 0) * 1000) / 1000;
+  function armarFila(marca) {
+    const porGrupo = {};
+    let tA = 0, tAA = 0, tMA = 0;
+    for (const canal of canales) {
+      const a = (actualData[marca] && actualData[marca][canal]) || 0;
+      const aa = (anioAnteriorData[marca] && anioAnteriorData[marca][canal]) || 0;
+      const ma = (mesAnteriorData[marca] && mesAnteriorData[marca][canal]) || 0;
+      porGrupo[canal] = { actual: r3(a), anio_anterior: r3(aa), mes_anterior: r3(ma) };
+      tA += a; tAA += aa; tMA += ma;
+    }
+    return { nombre: marca, porGrupo, total: { actual: r3(tA), anio_anterior: r3(tAA), mes_anterior: r3(tMA) } };
+  }
+ 
+  const filas = marcas.map(armarFila).sort((a, b) => b.total.actual - a.total.actual);
+  const totalGeneral = { porGrupo: {}, total: { actual: 0, anio_anterior: 0, mes_anterior: 0 } };
+  for (const canal of canales) {
+    let a = 0, aa = 0, ma = 0;
+    for (const f of filas) { a += f.porGrupo[canal].actual; aa += f.porGrupo[canal].anio_anterior; ma += f.porGrupo[canal].mes_anterior; }
+    totalGeneral.porGrupo[canal] = { actual: r3(a), anio_anterior: r3(aa), mes_anterior: r3(ma) };
+    totalGeneral.total.actual += a; totalGeneral.total.anio_anterior += aa; totalGeneral.total.mes_anterior += ma;
+  }
+  totalGeneral.total = { actual: r3(totalGeneral.total.actual), anio_anterior: r3(totalGeneral.total.anio_anterior), mes_anterior: r3(totalGeneral.total.mes_anterior) };
+ 
+  sendJson(res, 200, {
+    mes, anio, mes_anterior_num: mesAnteriorNum, anio_mes_anterior: anioMesAnterior,
+    grupos: canales, filas, total_general: totalGeneral,
+  });
+});
+ 
+// Compradores (clientes distintos) por marca y canal, para UNA categoria a la
+// vez. Misma idea que /api/marca-canal pero contando clientes en vez de sumar HL.
+route('GET', '/api/marca-canal-compradores', async (req, res) => {
+  if (!requireAuth(req, res, ['admin', 'supervisor', 'vendedor'])) return;
+  const parsed = url.parse(req.url, true);
+  const mes = Number(parsed.query.mes);
+  const anio = Number(parsed.query.anio);
+  const categoria = parsed.query.categoria || '';
+  if (!mes || !anio || !categoria) return sendJson(res, 400, { error: 'Faltan parametros mes, anio y categoria' });
+  const { clause, params, join } = buildFiltros(parsed.query);
+  const { mesAnteriorNum, anioMesAnterior } = periodoMesAnterior(mes, anio);
+ 
+  function compradoresPorMarca(mesQ, anioQ) {
+    const rows = db.prepare(`
+      SELECT marca, canal, COUNT(*) as n FROM (
+        SELECT v.marca as marca, v.canal as canal, v.cliente_id as cliente_id, SUM(v.um_hl) as hl
+        FROM ventas v ${join}
+        WHERE v.categoria = ? AND v.mes = ? AND v.anio = ?${clause}
+        GROUP BY v.marca, v.canal, v.cliente_id
+        HAVING SUM(v.um_hl) >= 0.001
+      ) GROUP BY marca, canal
+    `).all(categoria, mesQ, anioQ, ...params);
+    const out = {};
+    for (const r of rows) {
+      const marca = r.marca || 'SIN MARCA';
+      const canal = r.canal || 'SIN CANAL';
+      if (!out[marca]) out[marca] = {};
+      out[marca][canal] = r.n;
+    }
+    return out;
+  }
+ 
+  const actualData = compradoresPorMarca(mes, anio);
+  const anioAnteriorData = compradoresPorMarca(mes, anio - 1);
+  const mesAnteriorData = compradoresPorMarca(mesAnteriorNum, anioMesAnterior);
+  const marcas = Array.from(new Set([
+    ...Object.keys(actualData), ...Object.keys(anioAnteriorData), ...Object.keys(mesAnteriorData),
+  ])).sort();
+  const canales = Array.from(new Set([
+    ...Object.values(actualData).flatMap(o => Object.keys(o)),
+    ...Object.values(anioAnteriorData).flatMap(o => Object.keys(o)),
+    ...Object.values(mesAnteriorData).flatMap(o => Object.keys(o)),
+  ])).sort();
+ 
+  function armarFila(marca) {
+    const porGrupo = {};
+    for (const canal of canales) {
+      porGrupo[canal] = {
+        actual: (actualData[marca] && actualData[marca][canal]) || 0,
+        anio_anterior: (anioAnteriorData[marca] && anioAnteriorData[marca][canal]) || 0,
+        mes_anterior: (mesAnteriorData[marca] && mesAnteriorData[marca][canal]) || 0,
+      };
+    }
+    let tA = 0, tAA = 0, tMA = 0;
+    for (const canal of canales) { tA += porGrupo[canal].actual; tAA += porGrupo[canal].anio_anterior; tMA += porGrupo[canal].mes_anterior; }
+    return { nombre: marca, porGrupo, total: { actual: tA, anio_anterior: tAA, mes_anterior: tMA } };
+  }
+ 
+  const filas = marcas.map(armarFila).sort((a, b) => b.total.actual - a.total.actual);
+  const totalGeneral = { porGrupo: {}, total: { actual: 0, anio_anterior: 0, mes_anterior: 0 } };
+  for (const canal of canales) {
+    let a = 0, aa = 0, ma = 0;
+    for (const f of filas) { a += f.porGrupo[canal].actual; aa += f.porGrupo[canal].anio_anterior; ma += f.porGrupo[canal].mes_anterior; }
+    totalGeneral.porGrupo[canal] = { actual: a, anio_anterior: aa, mes_anterior: ma };
+    totalGeneral.total.actual += a; totalGeneral.total.anio_anterior += aa; totalGeneral.total.mes_anterior += ma;
+  }
+ 
+  sendJson(res, 200, {
+    mes, anio, mes_anterior_num: mesAnteriorNum, anio_mes_anterior: anioMesAnterior,
+    grupos: canales, filas, total_general: totalGeneral,
   });
 });
  
