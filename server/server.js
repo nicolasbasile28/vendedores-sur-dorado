@@ -260,7 +260,7 @@ function procesarExcelYGuardar(buffer) {
   const fechaIdx = findCol('Fecha Comprobante');
   const transpIdx = findCol('Descripcion Transporte');
   const articuloIdx = findCol('Descripcion de Articulo');
-  const canalIdx = findCol('Descripcion Subcanal MKT');
+  const canalIdx = findCol('Descripcion canal MKT');
 
   const supRefRow = db.prepare('SELECT value FROM meta WHERE key = ?').get('sup_ref_json');
   let supRef = {};
