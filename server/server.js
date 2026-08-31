@@ -1,4 +1,3 @@
-S
 // server.js - Servidor HTTP principal
 const http = require('http');
 const fs = require('fs');
