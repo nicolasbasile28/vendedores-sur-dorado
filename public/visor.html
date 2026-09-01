@@ -39,6 +39,29 @@
     background:var(--card2); border:1px solid var(--border); color:var(--text);
     padding:6px 8px; border-radius:6px; font-size:14px;
   }
+  .ms{position:relative; display:inline-block;}
+  .ms-btn{
+    background:var(--card2); border:1px solid var(--border); color:var(--text);
+    padding:6px 10px; border-radius:6px; font-size:14px; cursor:pointer;
+  }
+  .ms-btn.activo{border-color:var(--dorado); color:var(--dorado);}
+  .ms-panel{
+    position:absolute; top:calc(100% + 4px); left:0; z-index:20;
+    background:var(--card2); border:1px solid var(--border); border-radius:8px;
+    padding:8px; min-width:220px; max-height:260px; overflow-y:auto;
+    box-shadow:0 6px 20px rgba(0,0,0,.4);
+  }
+  .ms-panel .ms-option{
+    display:flex; align-items:center; gap:8px; padding:5px 4px; font-size:13px; cursor:pointer; border-radius:4px;
+  }
+  .ms-panel .ms-option:hover{background:rgba(255,255,255,.06);}
+  .ms-panel .ms-option input{margin:0;}
+  .ms-panel .ms-actions{
+    display:flex; justify-content:space-between; padding:4px 4px 2px; margin-top:4px;
+    border-top:1px solid var(--border); font-size:12px;
+  }
+  .ms-panel .ms-actions a{color:var(--text2); cursor:pointer; text-decoration:underline;}
+  .ms-empty{font-size:12px; color:var(--text2); padding:6px 4px;}
   .periodo button{
     background:var(--bordo); color:#fff; border:none; padding:7px 14px;
     border-radius:6px; cursor:pointer; font-size:13px;
@@ -148,10 +171,22 @@
 
       <div class="periodo" id="filtrosArea">
         <span>Filtros:</span>
-        <select id="filtroSupervisor" onchange="loadKpis()"><option value="">Supervisor (todos)</option></select>
-        <select id="filtroVendedor" onchange="loadKpis()"><option value="">Vendedor (todos)</option></select>
-        <select id="filtroDia" onchange="loadKpis()"><option value="">Día (todos)</option></select>
-        <select id="filtroCamionero" onchange="loadKpis()"><option value="">Camionero (todos)</option></select>
+        <div class="ms" id="ms-filtroSupervisor" data-label="Supervisor">
+          <button type="button" class="ms-btn" onclick="toggleMs('filtroSupervisor')">Supervisor (todos)</button>
+          <div class="ms-panel hidden"></div>
+        </div>
+        <div class="ms" id="ms-filtroVendedor" data-label="Vendedor">
+          <button type="button" class="ms-btn" onclick="toggleMs('filtroVendedor')">Vendedor (todos)</button>
+          <div class="ms-panel hidden"></div>
+        </div>
+        <div class="ms" id="ms-filtroDia" data-label="Día">
+          <button type="button" class="ms-btn" onclick="toggleMs('filtroDia')">Día (todos)</button>
+          <div class="ms-panel hidden"></div>
+        </div>
+        <div class="ms" id="ms-filtroCamionero" data-label="Camionero">
+          <button type="button" class="ms-btn" onclick="toggleMs('filtroCamionero')">Camionero (todos)</button>
+          <div class="ms-panel hidden"></div>
+        </div>
         <button onclick="limpiarFiltros()" style="background:transparent; border:1px solid var(--border); color:var(--text2);">Limpiar</button>
       </div>
     </div>
@@ -754,35 +789,110 @@ async function loadFiltrosOpciones(){
     const res = await fetch(API + '/api/filtros/opciones', {headers: authHeaders()});
     const data = await res.json();
     if(!res.ok) return;
-    fillSelect('filtroSupervisor', data.supervisores, 'Supervisor (todos)');
-    fillSelect('filtroVendedor', data.vendedores, 'Vendedor (todos)');
-    fillSelect('filtroDia', data.dias, 'Día (todos)');
-    fillSelect('filtroCamionero', data.camioneros, 'Camionero (todos)');
+    fillMs('filtroSupervisor', data.supervisores);
+    fillMs('filtroVendedor', data.vendedores);
+    fillMs('filtroDia', data.dias);
+    fillMs('filtroCamionero', data.camioneros);
   }catch(e){}
 }
 
-function fillSelect(id, values, placeholder){
-  const sel = document.getElementById(id);
-  const current = sel.value;
-  sel.innerHTML = `<option value="">${placeholder}</option>` + values.map(v => `<option value="${v.replace(/"/g,'&quot;')}">${v}</option>`).join('');
-  sel.value = current;
+// Componente de filtro con seleccion multiple (checkboxes en un panel
+// desplegable). MS_STATE guarda, por id de filtro, el Set de valores
+// tildados; MS_VALUES guarda la lista completa de opciones disponibles
+// (para poder reconstruir el panel sin perder la seleccion al recargar).
+const MS_STATE = {};
+const MS_VALUES = {};
+
+function fillMs(id, values){
+  MS_VALUES[id] = values || [];
+  if(!MS_STATE[id]) MS_STATE[id] = new Set();
+  // saca de la seleccion valores que ya no existen mas en la lista
+  MS_STATE[id] = new Set([...MS_STATE[id]].filter(v => values.includes(v)));
+  renderMsPanel(id);
+  updateMsButton(id);
+}
+
+function renderMsPanel(id){
+  const wrap = document.getElementById('ms-' + id);
+  const panel = wrap.querySelector('.ms-panel');
+  const values = MS_VALUES[id] || [];
+  const selected = MS_STATE[id] || new Set();
+  if(!values.length){
+    panel.innerHTML = '<div class="ms-empty">Sin opciones disponibles.</div>';
+    return;
+  }
+  let html = '';
+  for(const v of values){
+    const checked = selected.has(v) ? 'checked' : '';
+    const vAttr = v.replace(/"/g,'&quot;');
+    html += `<label class="ms-option"><input type="checkbox" value="${vAttr}" ${checked} onchange="onMsCheck('${id}', this)"> ${v}</label>`;
+  }
+  html += `<div class="ms-actions"><a onclick="msSelectAll('${id}')">Todos</a><a onclick="msClear('${id}')">Ninguno</a></div>`;
+  panel.innerHTML = html;
+}
+
+function onMsCheck(id, input){
+  if(!MS_STATE[id]) MS_STATE[id] = new Set();
+  if(input.checked) MS_STATE[id].add(input.value);
+  else MS_STATE[id].delete(input.value);
+  updateMsButton(id);
+  loadKpis();
+}
+
+function msSelectAll(id){
+  MS_STATE[id] = new Set(MS_VALUES[id] || []);
+  renderMsPanel(id);
+  updateMsButton(id);
+  loadKpis();
+}
+
+function msClear(id){
+  MS_STATE[id] = new Set();
+  renderMsPanel(id);
+  updateMsButton(id);
+  loadKpis();
+}
+
+function updateMsButton(id){
+  const wrap = document.getElementById('ms-' + id);
+  const btn = wrap.querySelector('.ms-btn');
+  const label = wrap.dataset.label;
+  const n = (MS_STATE[id] || new Set()).size;
+  if(n === 0){ btn.textContent = `${label} (todos)`; btn.classList.remove('activo'); }
+  else { btn.textContent = `${label} (${n})`; btn.classList.add('activo'); }
+}
+
+function toggleMs(id){
+  document.querySelectorAll('.ms-panel').forEach(p => {
+    if(p !== document.querySelector('#ms-' + id + ' .ms-panel')) p.classList.add('hidden');
+  });
+  document.querySelector('#ms-' + id + ' .ms-panel').classList.toggle('hidden');
+}
+
+document.addEventListener('click', (e) => {
+  if(!e.target.closest('.ms')) document.querySelectorAll('.ms-panel').forEach(p => p.classList.add('hidden'));
+});
+
+function getMsValues(id){
+  return Array.from(MS_STATE[id] || []);
 }
 
 function limpiarFiltros(){
-  ['filtroSupervisor','filtroVendedor','filtroDia','filtroCamionero'].forEach(id => document.getElementById(id).value = '');
+  ['filtroSupervisor','filtroVendedor','filtroDia','filtroCamionero'].forEach(id => {
+    MS_STATE[id] = new Set();
+    renderMsPanel(id);
+    updateMsButton(id);
+  });
   loadKpis();
 }
 
 function filtrosQueryString(){
-  const supervisor = document.getElementById('filtroSupervisor').value;
-  const vendedor = document.getElementById('filtroVendedor').value;
-  const dia = document.getElementById('filtroDia').value;
-  const camionero = document.getElementById('filtroCamionero').value;
   let qs = '';
-  if(supervisor) qs += '&supervisor=' + encodeURIComponent(supervisor);
-  if(vendedor) qs += '&vendedor=' + encodeURIComponent(vendedor);
-  if(dia) qs += '&dia=' + encodeURIComponent(dia);
-  if(camionero) qs += '&camionero=' + encodeURIComponent(camionero);
+  const map = { filtroSupervisor:'supervisor', filtroVendedor:'vendedor', filtroDia:'dia', filtroCamionero:'camionero' };
+  for(const id in map){
+    const vals = getMsValues(id);
+    if(vals.length) qs += '&' + map[id] + '=' + encodeURIComponent(vals.join('|'));
+  }
   return qs;
 }
 
