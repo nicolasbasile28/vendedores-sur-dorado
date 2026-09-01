@@ -572,15 +572,32 @@ route('GET', '/api/upload-excel/status', async (req, res) => {
   sendJson(res, 200, { status: 'procesando' });
 });
  
+// Cada filtro llega como valores separados por "|" (el frontend permite elegir
+// mas de una opcion por filtro), por eso se arma un "IN (?,?,...)" en vez de
+// una comparacion "=" simple. parseMulti separa y descarta vacios.
+function parseMulti(v) {
+  if (!v) return [];
+  return String(v).split('|').map((s) => s.trim()).filter(Boolean);
+}
 function buildFiltros(query) {
-  const filtros = { supervisor: query.supervisor || '', camionero: query.camionero || '', vendedor: query.vendedor || '', dia: query.dia || '' };
-  let needsJoin = !!(filtros.vendedor || filtros.dia);
+  const filtros = {
+    supervisor: parseMulti(query.supervisor),
+    camionero: parseMulti(query.camionero),
+    vendedor: parseMulti(query.vendedor),
+    dia: parseMulti(query.dia),
+  };
+  let needsJoin = !!(filtros.vendedor.length || filtros.dia.length);
   let clause = '';
   const params = [];
-  if (filtros.supervisor) { clause += ' AND v.supervisor = ?'; params.push(filtros.supervisor); }
-  if (filtros.camionero) { clause += ' AND v.camionero = ?'; params.push(filtros.camionero); }
-  if (filtros.vendedor) { clause += ' AND c.personal_comercial = ?'; params.push(filtros.vendedor); }
-  if (filtros.dia) { clause += ' AND c.dias_visita = ?'; params.push(filtros.dia); }
+  function addIn(campo, valores) {
+    if (!valores.length) return;
+    clause += ` AND ${campo} IN (${valores.map(() => '?').join(',')})`;
+    params.push(...valores);
+  }
+  addIn('v.supervisor', filtros.supervisor);
+  addIn('v.camionero', filtros.camionero);
+  addIn('c.personal_comercial', filtros.vendedor);
+  addIn('c.dias_visita', filtros.dia);
   const join = needsJoin ? 'LEFT JOIN clientes c ON c.cliente_id = v.cliente_id' : '';
   return { clause, params, join };
 }
