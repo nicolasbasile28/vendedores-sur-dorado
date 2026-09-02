@@ -736,6 +736,28 @@ route('POST', '/api/admin/users/:id/reset-password', async (req, res, params) =>
   db.prepare('UPDATE users SET password_hash = ?, salt = ? WHERE id = ?').run(hash, salt, params.id);
   sendJson(res, 200, { ok: true });
 });
+// Cambio de la PROPIA contraseña (cualquier usuario logueado, no requiere ser
+// admin) - a diferencia de /reset-password (solo admin, para otros usuarios),
+// esta pide la contraseña actual para confirmar identidad.
+route('POST', '/api/me/change-password', async (req, res) => {
+  const session = requireAuth(req, res, ['admin', 'supervisor', 'vendedor']);
+  if (!session) return;
+  const body = JSON.parse((await readBody(req)).toString('utf-8') || '{}');
+  const { currentPassword, newPassword } = body;
+  if (!currentPassword || !newPassword) {
+    return sendJson(res, 400, { error: 'Faltan datos: contraseña actual y nueva' });
+  }
+  if (newPassword.length < 4) {
+    return sendJson(res, 400, { error: 'La contraseña nueva debe tener al menos 4 caracteres' });
+  }
+  const user = db.prepare('SELECT * FROM users WHERE id = ?').get(session.user_id);
+  if (!user || !authLib.verifyPassword(currentPassword, user.salt, user.password_hash)) {
+    return sendJson(res, 400, { error: 'La contraseña actual es incorrecta' });
+  }
+  const { hash, salt } = authLib.hashPassword(newPassword);
+  db.prepare('UPDATE users SET password_hash = ?, salt = ? WHERE id = ?').run(hash, salt, session.user_id);
+  sendJson(res, 200, { ok: true });
+});
 
 route('GET', '/api/ranking/marcas', async (req, res) => {
   if (!requireAuth(req, res, ['admin', 'supervisor', 'vendedor'])) return;
