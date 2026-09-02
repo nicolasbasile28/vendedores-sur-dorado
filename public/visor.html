@@ -384,6 +384,44 @@
       <p class="note">Este número se usa para calcular la venta proyectada de todas las categorías. Se guarda una sola vez y queda disponible para todos.</p>
     </div>
 
+    <div class="section" id="cambiarPassSection">
+      <h2>Cambiar mi contraseña</h2>
+      <div class="config-row">
+        <input id="passActual" type="password" placeholder="Contraseña actual">
+        <input id="passNueva" type="password" placeholder="Contraseña nueva">
+        <button onclick="cambiarMiPassword()">Cambiar</button>
+      </div>
+      <div id="cambiarPassMsg" class="msg"></div>
+    </div>
+
+    <div class="section" id="adminUsersSection" style="display:none;">
+      <h2>Usuarios (solo admin)</h2>
+      <div style="overflow-x:auto;">
+        <table style="width:100%; border-collapse:collapse; font-size:13px;">
+          <thead>
+            <tr style="text-align:left; color:var(--text2); border-bottom:1px solid var(--border);">
+              <th style="padding:6px;">Usuario</th>
+              <th style="padding:6px;">Rol</th>
+              <th style="padding:6px;"></th>
+            </tr>
+          </thead>
+          <tbody id="usersBody"><tr><td colspan="3" style="padding:10px;">Cargando...</td></tr></tbody>
+        </table>
+      </div>
+      <div class="config-row" style="margin-top:14px;">
+        <input id="nuevoUserUsername" type="text" placeholder="Usuario">
+        <input id="nuevoUserPassword" type="text" placeholder="Contraseña">
+        <select id="nuevoUserRole">
+          <option value="supervisor">Supervisor</option>
+          <option value="admin">Administrador</option>
+          <option value="vendedor">Vendedor</option>
+        </select>
+        <button onclick="crearUsuario()">Crear usuario</button>
+      </div>
+      <div id="usersMsg" class="msg"></div>
+      <p class="note">Los usuarios "Administrador" ven y configuran todo. Los "Supervisor" solo pueden entrar a Configuración para subir el archivo de venta del día y cambiar su propia contraseña. "Vendedor" es para la futura app de vendedores.</p>
+    </div>
+
   </div>
 
   </div>
@@ -421,11 +459,12 @@ async function doLogin(){
     if(ROLE === 'admin'){
       document.getElementById('adminConfigSection').style.display = 'block';
       document.getElementById('adminSupRefSection').style.display = 'block';
+      document.getElementById('adminUsersSection').style.display = 'block';
     }
     showTab('volumen');
     await initPeriodoYKpis();
     loadFiltrosOpciones();
-    if(ROLE === 'admin') loadDiasConfig();
+    if(ROLE === 'admin'){ loadDiasConfig(); loadUsuarios(); }
   }catch(e){
     showMsg('loginMsg', 'No se pudo conectar al servidor: ' + e.message, false);
   }
@@ -1139,6 +1178,103 @@ async function saveDiasConfig(){
     loadKpis();
   }catch(e){
     showMsg('diasConfigMsg', 'Error: ' + e.message, false);
+  }
+}
+
+// Cambio de la propia contraseña - disponible para cualquier usuario logueado
+// (admin o supervisor). Pide la contraseña actual para confirmar identidad.
+async function cambiarMiPassword(){
+  const actual = document.getElementById('passActual').value;
+  const nueva = document.getElementById('passNueva').value;
+  if(!actual || !nueva){ showMsg('cambiarPassMsg', 'Completa ambos campos', false); return; }
+  try{
+    const res = await fetch(API + '/api/me/change-password', {
+      method: 'POST', headers: {'Content-Type':'application/json', ...authHeaders()},
+      body: JSON.stringify({currentPassword: actual, newPassword: nueva})
+    });
+    const data = await res.json();
+    if(!res.ok){ showMsg('cambiarPassMsg', data.error || 'Error', false); return; }
+    showMsg('cambiarPassMsg', 'Contraseña actualizada', true);
+    document.getElementById('passActual').value = '';
+    document.getElementById('passNueva').value = '';
+  }catch(e){
+    showMsg('cambiarPassMsg', 'Error: ' + e.message, false);
+  }
+}
+
+// Gestion de usuarios - solo admin. Restablecer contraseña usa prompt() para
+// no tener que armar un modal aparte; es consistente con el resto de la app
+// (los mensajes de validacion ya usan alert()/confirm() en varios lados).
+async function loadUsuarios(){
+  const body = document.getElementById('usersBody');
+  body.innerHTML = '<tr><td colspan="3" style="padding:10px;">Cargando...</td></tr>';
+  try{
+    const res = await fetch(API + '/api/admin/users', {headers: authHeaders()});
+    const rows = await res.json();
+    if(!res.ok){ body.innerHTML = '<tr><td colspan="3">' + (rows.error||'Error') + '</td></tr>'; return; }
+    if(!rows.length){ body.innerHTML = '<tr><td colspan="3" style="padding:10px;">Sin usuarios.</td></tr>'; return; }
+    body.innerHTML = rows.map(u => `
+      <tr style="border-bottom:1px solid var(--border);">
+        <td style="padding:6px;">${u.username}</td>
+        <td style="padding:6px;">${u.role}</td>
+        <td style="padding:6px; text-align:right; white-space:nowrap;">
+          <button onclick="resetPasswordUsuario(${u.id}, '${u.username.replace(/'/g,"\\'")}')" style="background:transparent; border:1px solid var(--border); color:var(--text2); padding:4px 8px; border-radius:6px; cursor:pointer; font-size:12px; margin-right:6px;">Restablecer contraseña</button>
+          <button onclick="borrarUsuario(${u.id}, '${u.username.replace(/'/g,"\\'")}')" style="background:transparent; border:1px solid var(--bad); color:var(--bad); padding:4px 8px; border-radius:6px; cursor:pointer; font-size:12px;">Borrar</button>
+        </td>
+      </tr>
+    `).join('');
+  }catch(e){
+    body.innerHTML = '<tr><td colspan="3">Error: ' + e.message + '</td></tr>';
+  }
+}
+
+async function crearUsuario(){
+  const username = document.getElementById('nuevoUserUsername').value.trim();
+  const password = document.getElementById('nuevoUserPassword').value;
+  const role = document.getElementById('nuevoUserRole').value;
+  if(!username || !password){ showMsg('usersMsg', 'Completa usuario y contraseña', false); return; }
+  try{
+    const res = await fetch(API + '/api/admin/users', {
+      method: 'POST', headers: {'Content-Type':'application/json', ...authHeaders()},
+      body: JSON.stringify({username, password, role})
+    });
+    const data = await res.json();
+    if(!res.ok){ showMsg('usersMsg', data.error || 'Error', false); return; }
+    showMsg('usersMsg', `Usuario "${username}" creado`, true);
+    document.getElementById('nuevoUserUsername').value = '';
+    document.getElementById('nuevoUserPassword').value = '';
+    loadUsuarios();
+  }catch(e){
+    showMsg('usersMsg', 'Error: ' + e.message, false);
+  }
+}
+
+async function resetPasswordUsuario(id, username){
+  const nueva = prompt(`Nueva contraseña para "${username}":`);
+  if(!nueva) return;
+  try{
+    const res = await fetch(API + `/api/admin/users/${id}/reset-password`, {
+      method: 'POST', headers: {'Content-Type':'application/json', ...authHeaders()},
+      body: JSON.stringify({password: nueva})
+    });
+    const data = await res.json();
+    if(!res.ok){ showMsg('usersMsg', data.error || 'Error', false); return; }
+    showMsg('usersMsg', `Contraseña de "${username}" actualizada`, true);
+  }catch(e){
+    showMsg('usersMsg', 'Error: ' + e.message, false);
+  }
+}
+
+async function borrarUsuario(id, username){
+  if(!confirm(`¿Borrar el usuario "${username}"?`)) return;
+  try{
+    const res = await fetch(API + `/api/admin/users/${id}`, { method: 'DELETE', headers: authHeaders() });
+    const data = await res.json();
+    if(!res.ok){ showMsg('usersMsg', data.error || 'Error', false); return; }
+    showMsg('usersMsg', `Usuario "${username}" borrado`, true);
+    loadUsuarios();
+  }catch(e){
+    showMsg('usersMsg', 'Error: ' + e.message, false);
   }
 }
 </script>
