@@ -932,11 +932,45 @@ const COLUMNAS_VENTAS_OPCIONALES = ['Fecha Comprobante','Descripcion Transporte'
 function excelSerialADate(n){
   return new Date(Math.round((n - 25569) * 86400 * 1000));
 }
+// Algunos archivos .xlsb (sobre todo los que no exporta Excel directamente,
+// como los de un ERP) no traen bien armado el registro de "dimensiones" de
+// la hoja, y SheetJS entonces no completa ws['!ref'] aunque las celdas SI
+// estén cargadas. Por eso, si falta '!ref', se calcula el rango a mano
+// recorriendo las claves de celdas que realmente existen, en vez de asumir
+// que el archivo está vacío.
+function calcularRangoDesdeClaves(ws){
+  let minR = Infinity, minC = Infinity, maxR = -1, maxC = -1;
+  for(const key in ws){
+    if(key[0] === '!') continue;
+    let addr;
+    try{ addr = XLSX.utils.decode_cell(key); }catch(e){ continue; }
+    if(addr.r < minR) minR = addr.r;
+    if(addr.c < minC) minC = addr.c;
+    if(addr.r > maxR) maxR = addr.r;
+    if(addr.c > maxC) maxC = addr.c;
+  }
+  if(maxR < 0) return null;
+  return { s:{r:minR, c:minC}, e:{r:maxR, c:maxC} };
+}
+function obtenerHojaYRango(wb){
+  for(const nombreHoja of wb.SheetNames){
+    const ws = wb.Sheets[nombreHoja];
+    if(!ws) continue;
+    let range = null;
+    if(ws['!ref']){
+      try{ range = XLSX.utils.decode_range(ws['!ref']); }catch(e){ range = null; }
+    }
+    if(!range) range = calcularRangoDesdeClaves(ws);
+    if(range) return { ws, range };
+  }
+  return null;
+}
 async function extraerFilasVentas(file){
   const wb = await readWorkbook(file);
-  const ws = wb.Sheets[wb.SheetNames[0]];
-  if(!ws || !ws['!ref']) throw new Error('El archivo está vacío o no se pudo leer.');
-  const range = XLSX.utils.decode_range(ws['!ref']);
+  if(!wb || !wb.SheetNames || !wb.SheetNames.length) throw new Error('El archivo está vacío o no se pudo leer.');
+  const hoja = obtenerHojaYRango(wb);
+  if(!hoja) throw new Error('El archivo está vacío o no se pudo leer.');
+  const { ws, range } = hoja;
   function celda(r, c){
     const cell = ws[XLSX.utils.encode_cell({r, c})];
     return cell ? cell.v : undefined;
