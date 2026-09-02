@@ -356,11 +356,11 @@
     <div class="section" id="uploadVentasSection">
       <h2>Actualizar archivo de ventas del día</h2>
       <div class="config-row">
-        <input type="file" id="fileVentasHoy" accept=".xlsx,.xls" style="background:var(--card2); color:var(--text); border:1px solid var(--border); padding:8px; border-radius:6px;">
+        <input type="file" id="fileVentasHoy" accept=".xlsx,.xls,.xlsb" style="background:var(--card2); color:var(--text); border:1px solid var(--border); padding:8px; border-radius:6px;">
         <button onclick="procesarVentasHoy()">Procesar y subir</button>
       </div>
       <div id="uploadVentasMsg" class="msg"></div>
-      <p class="note">El archivo debe tener las columnas: Descripción DIVISION, Descripción MARCA, Cliente, Descripcion Vendedor, Descripcion Supervisor, Impositivo, UM Total, Anulado, Fecha Comprobante, Descripcion Transporte, Descripcion de Articulo, Descripcion Canal MKT. Se procesa directo en el servidor, admite archivos grandes.</p>
+      <p class="note">El archivo debe tener las columnas: Descripción DIVISION, Descripción MARCA, Cliente, Descripcion Vendedor, Descripcion Supervisor, Impositivo, UM Total, Anulado, Fecha Comprobante, Descripcion Transporte, Descripcion de Articulo, Descripcion Canal MKT. Admite .xlsx y .xlsb. Se lee en tu navegador (admite archivos grandes) y se sube ya resumido.</p>
     </div>
 
     <div class="section" id="adminSupRefSection" style="display:none;">
@@ -919,6 +919,71 @@ function findColIndex(headerRow, name){
   for(let i=0;i<headerRow.length;i++){ if(headerRow[i] === name) return i; }
   return -1;
 }
+
+// El archivo de ventas real pesa 15-25MB con ~260 columnas y decenas de
+// miles de filas - parsearlo entero en el servidor puede quedarse sin
+// memoria y hacer que Render lo reinicie en loop. Por eso ahora se lee acá
+// (el navegador tiene memoria de sobra), se toman solo las ~12 columnas que
+// hacen falta, y se manda al servidor un JSON compacto con esas filas en
+// vez del Excel crudo. Se lee celda por celda (sin sheet_to_json) para no
+// armar en memoria un array con las 260 columnas de cada fila.
+const COLUMNAS_VENTAS_REQUERIDAS = ['Descripción DIVISION','Descripción MARCA','Cliente','Descripcion Vendedor','Descripcion Supervisor','Impositivo','UM Total','Anulado'];
+const COLUMNAS_VENTAS_OPCIONALES = ['Fecha Comprobante','Descripcion Transporte','Descripcion de Articulo','Descripcion Canal MKT'];
+function excelSerialADate(n){
+  return new Date(Math.round((n - 25569) * 86400 * 1000));
+}
+async function extraerFilasVentas(file){
+  const wb = await readWorkbook(file);
+  const ws = wb.Sheets[wb.SheetNames[0]];
+  if(!ws || !ws['!ref']) throw new Error('El archivo está vacío o no se pudo leer.');
+  const range = XLSX.utils.decode_range(ws['!ref']);
+  function celda(r, c){
+    const cell = ws[XLSX.utils.encode_cell({r, c})];
+    return cell ? cell.v : undefined;
+  }
+  const idx = {};
+  for(let c = range.s.c; c <= range.e.c; c++){
+    const nombre = celda(range.s.r, c);
+    if(COLUMNAS_VENTAS_REQUERIDAS.includes(nombre) || COLUMNAS_VENTAS_OPCIONALES.includes(nombre)) idx[nombre] = c;
+  }
+  for(const nombre of COLUMNAS_VENTAS_REQUERIDAS){
+    if(idx[nombre] === undefined) throw new Error('Falta la columna requerida: ' + nombre);
+  }
+  const cFecha = idx['Fecha Comprobante'];
+  const cTransp = idx['Descripcion Transporte'];
+  const cArticulo = idx['Descripcion de Articulo'];
+  const cCanal = idx['Descripcion Canal MKT'];
+
+  const filas = [];
+  for(let r = range.s.r + 1; r <= range.e.r; r++){
+    const division = celda(r, idx['Descripción DIVISION']);
+    if(division === undefined) continue;
+    let fechaStr = null;
+    if(cFecha !== undefined){
+      const fRaw = celda(r, cFecha);
+      let d = null;
+      if(fRaw instanceof Date && !isNaN(fRaw)) d = fRaw;
+      else if(typeof fRaw === 'number' && fRaw > 0) d = excelSerialADate(fRaw);
+      else if(typeof fRaw === 'string' && fRaw.trim()){ const p = new Date(fRaw); if(!isNaN(p)) d = p; }
+      if(d && !isNaN(d)) fechaStr = d.getFullYear() + '-' + String(d.getMonth()+1).padStart(2,'0') + '-' + String(d.getDate()).padStart(2,'0');
+    }
+    filas.push([
+      division,
+      celda(r, idx['Descripción MARCA']),
+      celda(r, idx['Cliente']),
+      celda(r, idx['Descripcion Vendedor']),
+      celda(r, idx['Descripcion Supervisor']),
+      celda(r, idx['Impositivo']),
+      celda(r, idx['UM Total']),
+      celda(r, idx['Anulado']),
+      fechaStr,
+      cTransp !== undefined ? celda(r, cTransp) : null,
+      cArticulo !== undefined ? celda(r, cArticulo) : null,
+      cCanal !== undefined ? celda(r, cCanal) : null,
+    ]);
+  }
+  return filas;
+}
 async function procesarSupRef(){
   const file = document.getElementById('fileSupRef').files[0];
   if(!file){ showMsg('supRefMsg', 'Elegí un archivo', false); return; }
@@ -950,27 +1015,33 @@ async function procesarSupRef(){
   }
 }
 
-// Se sube por partes (por si el archivo es grande) y el servidor lo procesa
-// con un lector en streaming (fila por fila, sin cargar el archivo entero en
-// memoria), asi que el tamaño del archivo no importa. Como el procesamiento
-// puede tardar, el servidor responde enseguida y esta funcion consulta el
-// estado hasta que termina, en vez de esperar la respuesta original.
+// El archivo se lee y se resume ACA (en el navegador, ver extraerFilasVentas
+// mas arriba) para no mandarle al servidor un binario pesado con 260
+// columnas que no le entra en memoria. Lo que se sube por partes es el JSON
+// ya resumido (livianito), y el servidor solo agrega/guarda, no parsea
+// ningun Excel. Como el guardado puede tardar unos segundos, el servidor
+// responde enseguida y esta funcion consulta el estado hasta que termina.
 async function procesarVentasHoy(){
   const file = document.getElementById('fileVentasHoy').files[0];
   if(!file){ showMsg('uploadVentasMsg', 'Elegí un archivo', false); return; }
   const CHUNK_SIZE = 4 * 1024 * 1024; // 4MB por pedazo
   try{
+    showMsg('uploadVentasMsg', 'Leyendo archivo...', true);
+    const filas = await extraerFilasVentas(file);
+    if(!filas.length) throw new Error('El archivo no tiene filas de ventas para las categorías conocidas.');
+    const blob = new Blob([JSON.stringify(filas)], {type: 'application/json'});
+
     showMsg('uploadVentasMsg', 'Iniciando subida...', true);
     const startRes = await fetch(API + '/api/upload-excel/start', { method: 'POST', headers: authHeaders() });
     const startData = await startRes.json();
     if(!startRes.ok){ showMsg('uploadVentasMsg', startData.error || 'Error iniciando subida', false); return; }
     const uploadId = startData.uploadId;
 
-    const totalPartes = Math.ceil(file.size / CHUNK_SIZE);
+    const totalPartes = Math.ceil(blob.size / CHUNK_SIZE) || 1;
     for(let i = 0; i < totalPartes; i++){
       const start = i * CHUNK_SIZE;
-      const end = Math.min(start + CHUNK_SIZE, file.size);
-      const chunk = file.slice(start, end);
+      const end = Math.min(start + CHUNK_SIZE, blob.size);
+      const chunk = blob.slice(start, end);
       showMsg('uploadVentasMsg', `Subiendo parte ${i+1} de ${totalPartes}...`, true);
       const chunkRes = await fetch(API + '/api/upload-excel/chunk?uploadId=' + encodeURIComponent(uploadId), {
         method: 'POST',
@@ -981,7 +1052,7 @@ async function procesarVentasHoy(){
       if(!chunkRes.ok){ showMsg('uploadVentasMsg', chunkData.error || `Error subiendo parte ${i+1}`, false); return; }
     }
 
-    showMsg('uploadVentasMsg', 'Todas las partes subidas. Procesando en el servidor (puede tardar varios minutos)...', true);
+    showMsg('uploadVentasMsg', 'Todas las partes subidas. Procesando en el servidor...', true);
     const finishRes = await fetch(API + '/api/upload-excel/finish?uploadId=' + encodeURIComponent(uploadId), {
       method: 'POST', headers: authHeaders()
     });
