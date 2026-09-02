@@ -230,14 +230,100 @@ const normNameServidor = s => (s || '').toString().toUpperCase().trim().split(/\
 function excelSerialToDate(n) {
   return new Date(Math.round((n - 25569) * 86400 * 1000));
 }
+// Logica de agregacion compartida entre "subir el Excel entero al servidor"
+// (procesarExcelYGuardar, /api/upload-excel directo) y "el navegador ya
+// extrajo las filas y manda solo eso" (procesarFilasVentasYGuardar, usado
+// por /api/upload-excel/finish - ver mas abajo por que). agregarFilaVenta
+// recibe los valores crudos de UNA fila (venga de una celda de Excel o de
+// un array JSON) y los acumula; finalizarYGuardar cierra el proceso.
+function nuevoAcumuladorVentas() {
+  const supRefRow = db.prepare('SELECT value FROM meta WHERE key = ?').get('sup_ref_json');
+  let supRef = {};
+  if (supRefRow) { try { supRef = JSON.parse(supRefRow.value); } catch (e) { supRef = {}; } }
+  return {
+    supRef,
+    FALLBACK: 'SIN ASIGNAR (no en tabla de referencia)',
+    vendAppAgg: new Map(),
+    ventaDepositoVend: new Set(),
+    fechaSet: new Set(),
+    mesCount: {},
+  };
+}
+function fechaAStr(d) {
+  return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
+}
+function agregarFilaVenta(acc, f) {
+  const cat = CAT_MAP_SERVIDOR[f.division];
+  if (!cat) return;
+  if (f.anulado && f.anulado !== 'NO') return;
+  const vendedor = f.vendedor || 'SIN VENDEDOR';
+  const marca = f.marca || 'SIN MARCA';
+  const um = f.um || 0;
+  const fiscal = f.impositivo === 'SI' ? 1 : 0;
+  const transp = f.transporte || 'SIN TRANSPORTE';
+  const canal = f.canal || 'SIN CANAL';
+  if (!f.supervisor || String(f.supervisor).trim() === '') acc.ventaDepositoVend.add(vendedor);
+
+  let dstr = null;
+  const fRaw = f.fecha;
+  if (fRaw instanceof Date && !isNaN(fRaw)) dstr = fechaAStr(fRaw);
+  else if (typeof fRaw === 'number' && fRaw > 0) dstr = fechaAStr(excelSerialToDate(fRaw));
+  else if (typeof fRaw === 'string' && fRaw.trim()) {
+    // "YYYY-MM-DD": ya viene normalizada (filas extraidas en el navegador)
+    if (/^\d{4}-\d{2}-\d{2}$/.test(fRaw.trim())) dstr = fRaw.trim();
+    else { const p = new Date(fRaw); if (!isNaN(p)) dstr = fechaAStr(p); }
+  }
+  if (dstr) {
+    acc.fechaSet.add(dstr);
+    const mkey = dstr.slice(0, 7);
+    acc.mesCount[mkey] = (acc.mesCount[mkey] || 0) + 1;
+  }
+
+  if (f.cliente !== undefined && f.cliente !== null && f.cliente !== '') {
+    const articulo = f.articulo || 'SIN ARTICULO';
+    const vaKey = f.cliente + '|' + cat + '|' + marca + '|' + articulo + '|' + vendedor + '|' + transp + '|' + fiscal + '|' + canal;
+    acc.vendAppAgg.set(vaKey, (acc.vendAppAgg.get(vaKey) || 0) + um);
+  }
+}
+function finalizarYGuardar(acc) {
+  let mesActual = '', mesNumOut = null, anioNumOut = null;
+  const bestMesEntry = Object.entries(acc.mesCount).sort((a, b) => b[1] - a[1])[0];
+  if (bestMesEntry) {
+    const [y, m] = bestMesEntry[0].split('-').map(Number);
+    const NOMBRES = ['Enero', 'Febrero', 'Marzo', 'Abril', 'Mayo', 'Junio', 'Julio', 'Agosto', 'Septiembre', 'Octubre', 'Noviembre', 'Diciembre'];
+    mesActual = NOMBRES[m - 1] + ' ' + y;
+    mesNumOut = m; anioNumOut = y;
+  }
+
+  const ventas = [];
+  for (const [vaKey, um] of acc.vendAppAgg.entries()) {
+    if (um < 0.001) continue;
+    const [cliente_id, categoria, marca, articulo, vendedor, camionero, fiscalStr, canal] = vaKey.split('|');
+    let supervisor;
+    if (acc.ventaDepositoVend.has(vendedor)) supervisor = 'VENTA DEPOSITO';
+    else supervisor = acc.supRef[normNameServidor(vendedor)] || acc.FALLBACK;
+    ventas.push({
+      cliente_id, categoria, marca, articulo,
+      um_hl: Math.round(um * 1000) / 1000,
+      supervisor, camionero, canal,
+      tipo_documento: fiscalStr === '1' ? 'FISCAL' : 'NO FISCAL',
+      mes: mesNumOut, anio: anioNumOut,
+    });
+  }
+
+  let resultado;
+  try {
+    resultado = guardarVentas({ clientes: [], ventas, mes_actual: mesActual, mes: mesNumOut, anio: anioNumOut, dias_venta_reales: acc.fechaSet.size });
+  } catch (e) {
+    throw { status: 500, error: 'Error guardando datos: ' + e.message };
+  }
+  return { ok: true, mes_actual: mesActual, ventas: resultado.ventas };
+}
+
 // Nota sobre memoria: el archivo de ventas tiene ~260 columnas pero solo se
-// necesitan ~12. Antes se armaba con sheet_to_json un array-de-arrays con
-// TODAS las columnas de TODAS las filas (una copia entera adicional de un
-// archivo que ya de por si puede tener decenas de miles de filas), lo que
-// puede hacer que el proceso se quede sin memoria en el servidor. Por eso
-// se lee directo de la estructura densa de la libreria (ws['!data']) y solo
-// se toman los valores de las columnas que hacen falta, fila por fila, sin
-// duplicar el resto.
+// necesitan ~12. Se lee directo de la estructura densa de la libreria
+// (ws['!data']) y solo se toman los valores de las columnas que hacen
+// falta, fila por fila, sin duplicar el resto en un array aparte.
 function procesarExcelYGuardar(buffer) {
   let wb;
   try {
@@ -279,105 +365,55 @@ function procesarExcelYGuardar(buffer) {
   const articuloIdx = findCol('Descripcion de Articulo');
   const canalIdx = findCol('Descripcion Canal MKT');
 
-  const supRefRow = db.prepare('SELECT value FROM meta WHERE key = ?').get('sup_ref_json');
-  let supRef = {};
-  if (supRefRow) { try { supRef = JSON.parse(supRefRow.value); } catch (e) { supRef = {}; } }
-  const FALLBACK = 'SIN ASIGNAR (no en tabla de referencia)';
-
-  const vendAppAgg = new Map();
-  const ventaDepositoVend = new Set();
-  const fechaSet = new Set();
-  const mesCount = {};
-
+  const acc = nuevoAcumuladorVentas();
   for (let r = range.s.r + 1; r <= range.e.r; r++) {
     if (!data[r]) continue;
-    const division = cellVal(r, idx.division);
-    const cat = CAT_MAP_SERVIDOR[division];
-    if (!cat) continue;
-    const anulado = cellVal(r, idx.anulado);
-    if (anulado && anulado !== 'NO') continue;
-    const cliente = cellVal(r, idx.cliente);
-    const vendedor = cellVal(r, idx.vendedor) || 'SIN VENDEDOR';
-    const marca = cellVal(r, idx.marca) || 'SIN MARCA';
-    const um = cellVal(r, idx.um) || 0;
-    const fiscal = cellVal(r, idx.impositivo) === 'SI' ? 1 : 0;
-    const transp = (transpIdx >= 0 ? cellVal(r, transpIdx) : null) || 'SIN TRANSPORTE';
-    const canal = (canalIdx >= 0 ? cellVal(r, canalIdx) : null) || 'SIN CANAL';
-    const supRaw = cellVal(r, idx.supervisor);
-    if (!supRaw || String(supRaw).trim() === '') ventaDepositoVend.add(vendedor);
-
-    if (fechaIdx >= 0) {
-      const fRaw = cellVal(r, fechaIdx);
-      let dateObj = null;
-      if (fRaw instanceof Date && !isNaN(fRaw)) dateObj = fRaw;
-      else if (typeof fRaw === 'number' && fRaw > 0) dateObj = excelSerialToDate(fRaw);
-      else if (typeof fRaw === 'string' && fRaw.trim()) { const p = new Date(fRaw); if (!isNaN(p)) dateObj = p; }
-      if (dateObj && !isNaN(dateObj)) {
-        const dstr = dateObj.getFullYear() + '-' + String(dateObj.getMonth() + 1).padStart(2, '0') + '-' + String(dateObj.getDate()).padStart(2, '0');
-        fechaSet.add(dstr);
-        const mkey = dateObj.getFullYear() + '-' + String(dateObj.getMonth() + 1).padStart(2, '0');
-        mesCount[mkey] = (mesCount[mkey] || 0) + 1;
-      }
-    }
-
-    if (articuloIdx >= 0 && cliente !== undefined && cliente !== null && cliente !== '') {
-      const articulo = cellVal(r, articuloIdx) || 'SIN ARTICULO';
-      const vaKey = cliente + '|' + cat + '|' + marca + '|' + articulo + '|' + vendedor + '|' + transp + '|' + fiscal + '|' + canal;
-      vendAppAgg.set(vaKey, (vendAppAgg.get(vaKey) || 0) + um);
-    }
-  }
-
-  let mesActual = '', mesNumOut = null, anioNumOut = null;
-  const bestMesEntry = Object.entries(mesCount).sort((a, b) => b[1] - a[1])[0];
-  if (bestMesEntry) {
-    const [y, m] = bestMesEntry[0].split('-').map(Number);
-    const NOMBRES = ['Enero', 'Febrero', 'Marzo', 'Abril', 'Mayo', 'Junio', 'Julio', 'Agosto', 'Septiembre', 'Octubre', 'Noviembre', 'Diciembre'];
-    mesActual = NOMBRES[m - 1] + ' ' + y;
-    mesNumOut = m; anioNumOut = y;
-  }
-
-  const ventas = [];
-  for (const [vaKey, um] of vendAppAgg.entries()) {
-    if (um < 0.001) continue;
-    const [cliente_id, categoria, marca, articulo, vendedor, camionero, fiscalStr, canal] = vaKey.split('|');
-    let supervisor;
-    if (ventaDepositoVend.has(vendedor)) supervisor = 'VENTA DEPOSITO';
-    else supervisor = supRef[normNameServidor(vendedor)] || FALLBACK;
-    ventas.push({
-      cliente_id, categoria, marca, articulo,
-      um_hl: Math.round(um * 1000) / 1000,
-      supervisor, camionero, canal,
-      tipo_documento: fiscalStr === '1' ? 'FISCAL' : 'NO FISCAL',
-      mes: mesNumOut, anio: anioNumOut,
+    agregarFilaVenta(acc, {
+      division: cellVal(r, idx.division),
+      marca: cellVal(r, idx.marca),
+      cliente: cellVal(r, idx.cliente),
+      vendedor: cellVal(r, idx.vendedor),
+      supervisor: cellVal(r, idx.supervisor),
+      impositivo: cellVal(r, idx.impositivo),
+      um: cellVal(r, idx.um),
+      anulado: cellVal(r, idx.anulado),
+      fecha: fechaIdx >= 0 ? cellVal(r, fechaIdx) : null,
+      transporte: transpIdx >= 0 ? cellVal(r, transpIdx) : null,
+      articulo: articuloIdx >= 0 ? cellVal(r, articuloIdx) : null,
+      canal: canalIdx >= 0 ? cellVal(r, canalIdx) : null,
     });
   }
-
-  let resultado;
-  try {
-    resultado = guardarVentas({ clientes: [], ventas, mes_actual: mesActual, mes: mesNumOut, anio: anioNumOut, dias_venta_reales: fechaSet.size });
-  } catch (e) {
-    throw { status: 500, error: 'Error guardando datos: ' + e.message };
-  }
-  return { ok: true, mes_actual: mesActual, ventas: resultado.ventas };
+  return finalizarYGuardar(acc);
 }
 
-// Esta funcion la usa el endpoint de subida por partes (/api/upload-excel/*),
-// pensado para archivos grandes. Antes usaba el lector en streaming de
-// ExcelJS (fila por fila desde disco, sin cargar todo en RAM), pero ExcelJS
-// solo sabe leer hojas en XML (.xlsx real) - los archivos que exporta el
-// sistema de ventas vienen en .xlsb (Excel Binario, hojas en binario, no
-// XML) y ExcelJS los leia mal EN SILENCIO (sin tirar error), guardando
-// datos incorrectos. La libreria 'xlsx' (SheetJS) que usa
-// procesarExcelYGuardar si soporta .xlsb ademas de .xlsx/.xls/.csv. El unico
-// motivo para el streaming era evitar quedarse sin memoria con archivos muy
-// grandes (80MB+): los archivos reales que se suben aca (los "informe de
-// ventas"/cierres mensuales) pesan entre 15 y 25MB, bien por debajo de ese
-// limite, asi que alcanza con leer el archivo entero (ya ensamblado en
-// disco por los pedazos subidos) y reusar el mismo parser, ya probado, que
-// soporta el formato real de estos archivos.
+// El archivo de ventas real pesa 15-25MB con ~260 columnas y decenas de
+// miles de filas: parsearlo entero en el servidor (aunque sea con la
+// libreria mas liviana) puede hacer que el proceso se quede sin memoria y
+// Render lo reinicie en loop. Por eso el archivo ya NO se sube crudo: el
+// navegador (que tiene memoria de sobra) lo abre con la misma libreria,
+// se queda solo con las ~12 columnas que hacen falta y manda al servidor
+// un JSON compacto con esas filas (ver extraerFilasVentas en visor.html).
+// Esta funcion recibe ese JSON ya ensamblado (subido por partes, igual que
+// antes) y solo agrega/guarda - no parsea ningun Excel.
+function procesarFilasVentasYGuardar(filas) {
+  if (!Array.isArray(filas)) throw { status: 400, error: 'Formato de datos invalido (se esperaba un array de filas).' };
+  const acc = nuevoAcumuladorVentas();
+  for (const f of filas) {
+    if (!Array.isArray(f) || f.length < 12) continue;
+    const [division, marca, cliente, vendedor, supervisor, impositivo, um, anulado, fecha, transporte, articulo, canal] = f;
+    agregarFilaVenta(acc, { division, marca, cliente, vendedor, supervisor, impositivo, um, anulado, fecha, transporte, articulo, canal });
+  }
+  return finalizarYGuardar(acc);
+}
 async function procesarExcelYGuardarStreaming(filePath) {
-  const buffer = fs.readFileSync(filePath);
-  return procesarExcelYGuardar(buffer);
+  const texto = fs.readFileSync(filePath, 'utf-8');
+  let filas;
+  try {
+    filas = JSON.parse(texto);
+  } catch (e) {
+    throw { status: 400, error: 'No se pudieron interpretar los datos subidos: ' + e.message };
+  }
+  return procesarFilasVentasYGuardar(filas);
 }
 
 route('POST', '/api/upload-excel', async (req, res) => {
