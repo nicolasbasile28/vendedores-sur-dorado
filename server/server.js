@@ -6,6 +6,7 @@ const url = require('url');
 const db = require('./db');
 const authLib = require('./auth');
 const XLSX = require('xlsx');
+const ExcelJS = require('exceljs');
 const crypto = require('crypto');
 const PORT = process.env.PORT || 3000;
 const PUBLIC_DIR = path.join(__dirname, '..', 'public');
@@ -230,12 +231,12 @@ const normNameServidor = s => (s || '').toString().toUpperCase().trim().split(/\
 function excelSerialToDate(n) {
   return new Date(Math.round((n - 25569) * 86400 * 1000));
 }
-// Logica de agregacion compartida entre "subir el Excel entero al servidor"
-// (procesarExcelYGuardar, /api/upload-excel directo) y "el navegador ya
-// extrajo las filas y manda solo eso" (procesarFilasVentasYGuardar, usado
-// por /api/upload-excel/finish - ver mas abajo por que). agregarFilaVenta
-// recibe los valores crudos de UNA fila (venga de una celda de Excel o de
-// un array JSON) y los acumula; finalizarYGuardar cierra el proceso.
+// Logica de agregacion compartida entre procesarExcelYGuardar (SheetJS, en
+// memoria - usado por /api/upload-excel directo) y
+// procesarExcelYGuardarStreaming (exceljs streaming - usado por
+// /api/upload-excel/finish, ver mas abajo por que). agregarFilaVenta recibe
+// los valores crudos de UNA fila y los acumula; finalizarYGuardar cierra el
+// proceso.
 function nuevoAcumuladorVentas() {
   const supRefRow = db.prepare('SELECT value FROM meta WHERE key = ?').get('sup_ref_json');
   let supRef = {};
@@ -386,34 +387,100 @@ function procesarExcelYGuardar(buffer) {
   return finalizarYGuardar(acc);
 }
 
-// El archivo de ventas real pesa 15-25MB con ~260 columnas y decenas de
-// miles de filas: parsearlo entero en el servidor (aunque sea con la
-// libreria mas liviana) puede hacer que el proceso se quede sin memoria y
-// Render lo reinicie en loop. Por eso el archivo ya NO se sube crudo: el
-// navegador (que tiene memoria de sobra) lo abre con la misma libreria,
-// se queda solo con las ~12 columnas que hacen falta y manda al servidor
-// un JSON compacto con esas filas (ver extraerFilasVentas en visor.html).
-// Esta funcion recibe ese JSON ya ensamblado (subido por partes, igual que
-// antes) y solo agrega/guarda - no parsea ningun Excel.
-function procesarFilasVentasYGuardar(filas) {
-  if (!Array.isArray(filas)) throw { status: 400, error: 'Formato de datos invalido (se esperaba un array de filas).' };
-  const acc = nuevoAcumuladorVentas();
-  for (const f of filas) {
-    if (!Array.isArray(f) || f.length < 12) continue;
-    const [division, marca, cliente, vendedor, supervisor, impositivo, um, anulado, fecha, transporte, articulo, canal] = f;
-    agregarFilaVenta(acc, { division, marca, cliente, vendedor, supervisor, impositivo, um, anulado, fecha, transporte, articulo, canal });
+// El archivo de ventas real pesa 15-25MB con ~260 columnas y hasta ~100.000
+// filas. Se probo primero parsearlo en el navegador con la misma libreria
+// que usa /api/upload-excel (xlsx/SheetJS), quedandose solo con las ~12
+// columnas que hacen falta, para no tener que subir el binario pesado. Pero
+// esa libreria arma el libro ENTERO en memoria antes de devolver nada, y con
+// este volumen terminaba "perdiendo" todas las celdas (el archivo se leia
+// como vacio) - paso tanto con el .xlsb original como con una copia
+// guardada de nuevo en Excel como .xlsx, asi que no era un problema del
+// formato del archivo sino del volumen de datos.
+// La solucion real es parsear en modo streaming: exceljs (WorkbookReader)
+// lee el archivo fila por fila SIN cargar el libro completo en memoria, asi
+// que el tamaño del archivo no importa. Por eso el archivo se vuelve a subir
+// crudo (ver procesarVentasHoy en visor.html) y se parsea aca.
+// exceljs no puede leer .xlsb (formato binario propietario de Microsoft, sin
+// XML adentro) - si el nombre del archivo termina en .xlsb se avisa antes de
+// intentar leerlo para no dar un error confuso.
+const COLUMNAS_VENTAS_REQUERIDAS = ['Descripción DIVISION', 'Descripción MARCA', 'Cliente', 'Descripcion Vendedor', 'Descripcion Supervisor', 'Impositivo', 'UM Total', 'Anulado'];
+const COLUMNAS_VENTAS_OPCIONALES = ['Fecha Comprobante', 'Descripcion Transporte', 'Descripcion de Articulo', 'Descripcion Canal MKT'];
+
+function cellValStreaming(v) {
+  if (v === null || v === undefined) return undefined;
+  if (v instanceof Date) return v;
+  if (typeof v === 'object') {
+    if (Array.isArray(v.richText)) return v.richText.map((rt) => rt.text).join('');
+    if (v.result !== undefined) return v.result;
+    if (v.text !== undefined) return v.text;
+    return undefined;
   }
-  return finalizarYGuardar(acc);
+  return v;
 }
-async function procesarExcelYGuardarStreaming(filePath) {
-  const texto = fs.readFileSync(filePath, 'utf-8');
-  let filas;
-  try {
-    filas = JSON.parse(texto);
-  } catch (e) {
-    throw { status: 400, error: 'No se pudieron interpretar los datos subidos: ' + e.message };
+
+async function procesarExcelYGuardarStreaming(filePath, nombreOriginal) {
+  if (nombreOriginal && /\.xlsb$/i.test(nombreOriginal)) {
+    throw { status: 400, error: 'Los archivos .xlsb no se pueden leer directamente. Abrilo en Excel, hace "Archivo > Guardar como > Libro de Excel (.xlsx)" y subi ese archivo.' };
   }
-  return procesarFilasVentasYGuardar(filas);
+
+  const acc = nuevoAcumuladorVentas();
+  const idx = {};
+  let headerLeida = false;
+  let filasLeidas = 0;
+
+  let workbookReader;
+  try {
+    workbookReader = new ExcelJS.stream.xlsx.WorkbookReader(filePath, {});
+    for await (const worksheetReader of workbookReader) {
+      for await (const row of worksheetReader) {
+        const vals = row.values;
+        if (!headerLeida) {
+          headerLeida = true;
+          for (let c = 1; c < vals.length; c++) {
+            const nombre = cellValStreaming(vals[c]);
+            if (COLUMNAS_VENTAS_REQUERIDAS.includes(nombre) || COLUMNAS_VENTAS_OPCIONALES.includes(nombre)) idx[nombre] = c;
+          }
+          for (const nombre of COLUMNAS_VENTAS_REQUERIDAS) {
+            if (idx[nombre] === undefined) throw { status: 400, error: 'Falta la columna requerida: ' + nombre };
+          }
+          continue;
+        }
+        const division = cellValStreaming(vals[idx['Descripción DIVISION']]);
+        if (division === undefined) continue;
+        filasLeidas++;
+        agregarFilaVenta(acc, {
+          division,
+          marca: cellValStreaming(vals[idx['Descripción MARCA']]),
+          cliente: cellValStreaming(vals[idx['Cliente']]),
+          vendedor: cellValStreaming(vals[idx['Descripcion Vendedor']]),
+          supervisor: cellValStreaming(vals[idx['Descripcion Supervisor']]),
+          impositivo: cellValStreaming(vals[idx['Impositivo']]),
+          um: cellValStreaming(vals[idx['UM Total']]),
+          anulado: cellValStreaming(vals[idx['Anulado']]),
+          fecha: idx['Fecha Comprobante'] !== undefined ? cellValStreaming(vals[idx['Fecha Comprobante']]) : null,
+          transporte: idx['Descripcion Transporte'] !== undefined ? cellValStreaming(vals[idx['Descripcion Transporte']]) : null,
+          articulo: idx['Descripcion de Articulo'] !== undefined ? cellValStreaming(vals[idx['Descripcion de Articulo']]) : null,
+          canal: idx['Descripcion Canal MKT'] !== undefined ? cellValStreaming(vals[idx['Descripcion Canal MKT']]) : null,
+        });
+      }
+      break; // solo se procesa la primera hoja
+    }
+  } catch (e) {
+    if (e && e.status) throw e;
+    const msg = (e && e.message) ? e.message : String(e);
+    // Bug conocido de exceljs (streaming): a veces, con la lectura por
+    // partes del zip, el bloque que dice cuantas hojas tiene el libro
+    // llega "tarde" y esto tira este error puntual - no es un archivo
+    // realmente corrupto. Suele funcionar si se sube de nuevo.
+    if (/reading '?sheets'?/i.test(msg)) {
+      throw { status: 400, error: 'Error interno al leer el archivo (problema conocido de la librería con archivos grandes). Probá subirlo de nuevo; si vuelve a pasar, avisale a tu desarrollador.' };
+    }
+    throw { status: 400, error: 'No se pudo interpretar el archivo Excel: ' + msg };
+  }
+
+  if (!headerLeida) throw { status: 400, error: 'El archivo está vacío o no se pudo leer (no se encontró ninguna fila).' };
+  if (filasLeidas === 0) throw { status: 400, error: 'El archivo no tiene filas de ventas para las categorías conocidas.' };
+  return finalizarYGuardar(acc);
 }
 
 route('POST', '/api/upload-excel', async (req, res) => {
@@ -446,13 +513,22 @@ function tmpPathFor(uploadId) {
 // del proxy (Render u otro), asi que /finish responde enseguida y el frontend
 // consulta el estado con /status en vez de esperar la respuesta del POST.
 const uploadJobs = new Map();
+// Nombre original del archivo (lo manda el navegador en /start): sirve para
+// avisar temprano si es un .xlsb, que exceljs no puede leer.
+const uploadFilenames = new Map();
 
 route('POST', '/api/upload-excel/start', async (req, res) => {
   const session = requireAuth(req, res, ['admin', 'supervisor']);
   if (!session) return;
+  const parsed = url.parse(req.url, true);
+  const filename = (parsed.query.filename || '').toString();
+  if (/\.xlsb$/i.test(filename)) {
+    return sendJson(res, 400, { error: 'Los archivos .xlsb no se pueden leer directamente. Abrilo en Excel, hace "Archivo > Guardar como > Libro de Excel (.xlsx)" y subi ese archivo.' });
+  }
   const uploadId = crypto.randomBytes(16).toString('hex');
   const filePath = tmpPathFor(uploadId);
   fs.writeFileSync(filePath, Buffer.alloc(0));
+  if (filename) uploadFilenames.set(uploadId, filename);
   sendJson(res, 200, { uploadId });
 });
 
@@ -488,12 +564,13 @@ route('POST', '/api/upload-excel/finish', async (req, res) => {
   sendJson(res, 202, { ok: true, uploadId, procesando: true });
 
   try {
-    const resultado = await procesarExcelYGuardarStreaming(filePath);
+    const resultado = await procesarExcelYGuardarStreaming(filePath, uploadFilenames.get(uploadId));
     uploadJobs.set(uploadId, { status: 'listo', resultado });
   } catch (e) {
     uploadJobs.set(uploadId, { status: 'error', error: e.error || e.message || 'Error desconocido' });
   } finally {
     try { fs.unlinkSync(filePath); } catch (e) {}
+    uploadFilenames.delete(uploadId);
   }
 });
 
