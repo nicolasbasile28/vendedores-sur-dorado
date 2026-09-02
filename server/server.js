@@ -230,6 +230,14 @@ const normNameServidor = s => (s || '').toString().toUpperCase().trim().split(/\
 function excelSerialToDate(n) {
   return new Date(Math.round((n - 25569) * 86400 * 1000));
 }
+// Nota sobre memoria: el archivo de ventas tiene ~260 columnas pero solo se
+// necesitan ~12. Antes se armaba con sheet_to_json un array-de-arrays con
+// TODAS las columnas de TODAS las filas (una copia entera adicional de un
+// archivo que ya de por si puede tener decenas de miles de filas), lo que
+// puede hacer que el proceso se quede sin memoria en el servidor. Por eso
+// se lee directo de la estructura densa de la libreria (ws['!data']) y solo
+// se toman los valores de las columnas que hacen falta, fila por fila, sin
+// duplicar el resto.
 function procesarExcelYGuardar(buffer) {
   let wb;
   try {
@@ -238,12 +246,21 @@ function procesarExcelYGuardar(buffer) {
     throw { status: 400, error: 'No se pudo interpretar el archivo Excel: ' + e.message };
   }
   const ws = wb.Sheets[wb.SheetNames[0]];
-  const rows = XLSX.utils.sheet_to_json(ws, { header: 1, raw: true, defval: undefined });
-  if (!rows || rows.length < 2) throw { status: 400, error: 'El archivo de ventas está vacío o no se pudo leer.' };
+  if (!ws || !ws['!ref'] || !ws['!data']) throw { status: 400, error: 'El archivo de ventas está vacío o no se pudo leer.' };
+  const range = XLSX.utils.decode_range(ws['!ref']);
+  const data = ws['!data'];
+  function cellVal(r, c) {
+    const row = data[r];
+    const cell = row ? row[c] : undefined;
+    return cell ? cell.v : undefined;
+  }
 
-  const header = rows[0];
+  const header = [];
+  for (let c = range.s.c; c <= range.e.c; c++) header.push(cellVal(range.s.r, c));
+  // findCol devuelve el numero de columna real (para usar con cellVal), no
+  // la posicion dentro de "header" - por eso se suma range.s.c.
   function findCol(name) {
-    for (let i = 0; i < header.length; i++) { if (header[i] === name) return i; }
+    for (let i = 0; i < header.length; i++) { if (header[i] === name) return i + range.s.c; }
     return -1;
   }
   const idx = {
@@ -272,26 +289,25 @@ function procesarExcelYGuardar(buffer) {
   const fechaSet = new Set();
   const mesCount = {};
 
-  for (let r = 1; r < rows.length; r++) {
-    const row = rows[r];
-    if (!row) continue;
-    const division = row[idx.division];
+  for (let r = range.s.r + 1; r <= range.e.r; r++) {
+    if (!data[r]) continue;
+    const division = cellVal(r, idx.division);
     const cat = CAT_MAP_SERVIDOR[division];
     if (!cat) continue;
-    const anulado = row[idx.anulado];
+    const anulado = cellVal(r, idx.anulado);
     if (anulado && anulado !== 'NO') continue;
-    const cliente = row[idx.cliente];
-    const vendedor = row[idx.vendedor] || 'SIN VENDEDOR';
-    const marca = row[idx.marca] || 'SIN MARCA';
-    const um = row[idx.um] || 0;
-    const fiscal = row[idx.impositivo] === 'SI' ? 1 : 0;
-    const transp = (transpIdx >= 0 ? row[transpIdx] : null) || 'SIN TRANSPORTE';
-    const canal = (canalIdx >= 0 ? row[canalIdx] : null) || 'SIN CANAL';
-    const supRaw = row[idx.supervisor];
+    const cliente = cellVal(r, idx.cliente);
+    const vendedor = cellVal(r, idx.vendedor) || 'SIN VENDEDOR';
+    const marca = cellVal(r, idx.marca) || 'SIN MARCA';
+    const um = cellVal(r, idx.um) || 0;
+    const fiscal = cellVal(r, idx.impositivo) === 'SI' ? 1 : 0;
+    const transp = (transpIdx >= 0 ? cellVal(r, transpIdx) : null) || 'SIN TRANSPORTE';
+    const canal = (canalIdx >= 0 ? cellVal(r, canalIdx) : null) || 'SIN CANAL';
+    const supRaw = cellVal(r, idx.supervisor);
     if (!supRaw || String(supRaw).trim() === '') ventaDepositoVend.add(vendedor);
 
     if (fechaIdx >= 0) {
-      const fRaw = row[fechaIdx];
+      const fRaw = cellVal(r, fechaIdx);
       let dateObj = null;
       if (fRaw instanceof Date && !isNaN(fRaw)) dateObj = fRaw;
       else if (typeof fRaw === 'number' && fRaw > 0) dateObj = excelSerialToDate(fRaw);
@@ -305,7 +321,7 @@ function procesarExcelYGuardar(buffer) {
     }
 
     if (articuloIdx >= 0 && cliente !== undefined && cliente !== null && cliente !== '') {
-      const articulo = row[articuloIdx] || 'SIN ARTICULO';
+      const articulo = cellVal(r, articuloIdx) || 'SIN ARTICULO';
       const vaKey = cliente + '|' + cat + '|' + marca + '|' + articulo + '|' + vendedor + '|' + transp + '|' + fiscal + '|' + canal;
       vendAppAgg.set(vaKey, (vendAppAgg.get(vaKey) || 0) + um);
     }
