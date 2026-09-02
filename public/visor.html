@@ -967,9 +967,22 @@ function obtenerHojaYRango(wb){
 }
 async function extraerFilasVentas(file){
   const wb = await readWorkbook(file);
-  if(!wb || !wb.SheetNames || !wb.SheetNames.length) throw new Error('El archivo está vacío o no se pudo leer.');
+  if(!wb || !wb.SheetNames || !wb.SheetNames.length) throw new Error('El archivo está vacío o no se pudo leer (el libro no tiene hojas).');
   const hoja = obtenerHojaYRango(wb);
-  if(!hoja) throw new Error('El archivo está vacío o no se pudo leer.');
+  if(!hoja){
+    // Diagnostico: si llegamos aca es porque ninguna hoja tiene celdas
+    // legibles para SheetJS. Se informa el detalle para poder ver, sin
+    // necesidad de la consola del navegador, que fue lo que paso.
+    let detalle;
+    try{
+      detalle = wb.SheetNames.map(n => {
+        const hojaWs = wb.Sheets[n] || {};
+        const nKeys = Object.keys(hojaWs).filter(k => k[0] !== '!').length;
+        return `${n}: ${nKeys} celdas`;
+      }).join(', ');
+    }catch(e){ detalle = 'no se pudo calcular'; }
+    throw new Error(`El archivo está vacío o no se pudo leer. (Hojas: ${detalle})`);
+  }
   const { ws, range } = hoja;
   function celda(r, c){
     const cell = ws[XLSX.utils.encode_cell({r, c})];
