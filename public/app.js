@@ -178,6 +178,9 @@ function renderClientList(list) {
     item.onclick = () => openCliente(item.getAttribute('data-id'));
   });
 }
+document.querySelectorAll('.cat-card').forEach(el => {
+  el.addEventListener('click', () => openCategoria(el.getAttribute('data-cat')));
+});
 document.getElementById('searchBox').addEventListener('input', (e) => {
   const q = e.target.value.trim().toLowerCase();
   if (!q) { renderClientList(currentClientList); return; }
@@ -190,6 +193,40 @@ document.getElementById('searchBox').addEventListener('input', (e) => {
 function escapeHtml(s) {
   return String(s == null ? '' : s).replace(/[&<>"']/g, m => ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' }[m]));
 }
+// ---------- Pantalla 1b: clientes que compraron una categoria ----------
+async function openCategoria(categoria) {
+  const vendedor = vendedorSelect.getValue();
+  const dia = diaSelect.getValue();
+  if (!vendedor || !dia) return;
+  showScreen('screenCategoria');
+  document.getElementById('categoriaTitle').textContent = `${CAT_ICONS[categoria]} ${categoria}`;
+  const content = document.getElementById('categoriaContent');
+  content.innerHTML = '<div class="loading">Cargando...</div>';
+  try {
+    const rows = await api(`/api/clientes/categoria?vendedor=${encodeURIComponent(vendedor)}&dia=${encodeURIComponent(dia)}&categoria=${encodeURIComponent(categoria)}`);
+    renderCategoriaClientes(rows);
+  } catch (e) {
+    content.innerHTML = '<div class="empty-msg">No se pudo cargar.</div>';
+  }
+}
+function renderCategoriaClientes(list) {
+  const content = document.getElementById('categoriaContent');
+  if (!list.length) { content.innerHTML = '<div class="empty-msg">No hay clientes para mostrar.</div>'; return; }
+  content.innerHTML = list.map(c => `
+    <div class="client-item" data-id="${escapeHtml(c.cliente_id)}">
+      <div>
+        <div class="name">${escapeHtml(c.razon_social || '(sin nombre)')}</div>
+        <div class="addr">${escapeHtml(c.domicilio || '')}</div>
+        <div class="code">Código: ${escapeHtml(c.cliente_id)}</div>
+      </div>
+      <div class="arrow">›</div>
+    </div>
+  `).join('');
+  content.querySelectorAll('.client-item').forEach(item => {
+    item.onclick = () => openCliente(item.getAttribute('data-id'));
+  });
+}
+document.getElementById('btnBackFromCategoria').onclick = goBack;
 // ---------- Pantalla 2: detalle de cliente ----------
 const CAT_ICONS = { 'Cervezas':'🍺', 'Aguas':'💧', 'Vinos':'🍷', 'Sidras':'🍏' };
 const CAT_COLORS = { 'Cervezas':'var(--cerveza)', 'Aguas':'var(--agua)', 'Vinos':'var(--vinos)', 'Sidras':'var(--sidras)' };
