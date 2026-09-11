@@ -456,26 +456,20 @@ async function doLogin(){
     document.getElementById('loginScreen').classList.add('hidden');
     document.getElementById('mainScreen').classList.remove('hidden');
     document.getElementById('userLabel').textContent = USERNAME + ' (' + ROLE + ')';
+    // El supervisor ve todo el dashboard (Volumen, Compradores) y en
+    // Configuracion puede subir el archivo de venta del dia. Las secciones
+    // de mapeo Vendedor-Supervisor, configuracion de dias y usuarios/
+    // contraseñas quedan ocultas (display:none por defecto en el HTML) y
+    // solo se muestran para admin.
     if(ROLE === 'admin'){
       document.getElementById('adminConfigSection').style.display = 'block';
       document.getElementById('adminSupRefSection').style.display = 'block';
       document.getElementById('adminUsersSection').style.display = 'block';
-      document.getElementById('cambiarPassSection').style.display = '';
-      document.getElementById('tabBtnVolumen').style.display = '';
-      document.getElementById('tabBtnCompradores').style.display = '';
-      showTab('volumen');
-      await initPeriodoYKpis();
-      loadFiltrosOpciones();
-      loadDiasConfig();
-      loadUsuarios();
-    } else {
-      // Supervisor (y cualquier otro rol no-admin que llegue aca): solo puede
-      // ver la seccion de subir el archivo de venta del dia, nada mas.
-      document.getElementById('cambiarPassSection').style.display = 'none';
-      document.getElementById('tabBtnVolumen').style.display = 'none';
-      document.getElementById('tabBtnCompradores').style.display = 'none';
-      showTab('config');
     }
+    showTab('volumen');
+    await initPeriodoYKpis();
+    loadFiltrosOpciones();
+    if(ROLE === 'admin'){ loadDiasConfig(); loadUsuarios(); }
   }catch(e){
     showMsg('loginMsg', 'No se pudo conectar al servidor: ' + e.message, false);
   }
