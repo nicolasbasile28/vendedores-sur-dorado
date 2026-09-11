@@ -791,3 +791,516 @@ route('POST', '/api/admin/users/:id/reset-password', async (req, res, params) =>
   const body = JSON.parse((await readBody(req)).toString('utf-8') || '{}');
   if (!body.password) return sendJson(res, 400, { error: 'Falta la nueva contraseña' });
   const { hash, salt } = authLib.hashPassword(body.password);
+  db.prepare('UPDATE users SET password_hash = ?, salt = ? WHERE id = ?').run(hash, salt, params.id);
+  sendJson(res, 200, { ok: true });
+});
+// Cambio de la PROPIA contraseña (cualquier usuario logueado, no requiere ser
+// admin) - a diferencia de /reset-password (solo admin, para otros usuarios),
+// esta pide la contraseña actual para confirmar identidad.
+route('POST', '/api/me/change-password', async (req, res) => {
+  const session = requireAuth(req, res, ['admin', 'supervisor', 'vendedor']);
+  if (!session) return;
+  const body = JSON.parse((await readBody(req)).toString('utf-8') || '{}');
+  const { currentPassword, newPassword } = body;
+  if (!currentPassword || !newPassword) {
+    return sendJson(res, 400, { error: 'Faltan datos: contraseña actual y nueva' });
+  }
+  if (newPassword.length < 4) {
+    return sendJson(res, 400, { error: 'La contraseña nueva debe tener al menos 4 caracteres' });
+  }
+  const user = db.prepare('SELECT * FROM users WHERE id = ?').get(session.user_id);
+  if (!user || !authLib.verifyPassword(currentPassword, user.salt, user.password_hash)) {
+    return sendJson(res, 400, { error: 'La contraseña actual es incorrecta' });
+  }
+  const { hash, salt } = authLib.hashPassword(newPassword);
+  db.prepare('UPDATE users SET password_hash = ?, salt = ? WHERE id = ?').run(hash, salt, session.user_id);
+  sendJson(res, 200, { ok: true });
+});
+
+route('GET', '/api/ranking/marcas', async (req, res) => {
+  if (!requireAuth(req, res, ['admin', 'supervisor', 'vendedor'])) return;
+  const parsed = url.parse(req.url, true);
+  const mes = Number(parsed.query.mes);
+  const anio = Number(parsed.query.anio);
+  const categoria = parsed.query.categoria || '';
+  if (!mes || !anio || !categoria) return sendJson(res, 400, { error: 'Faltan parametros mes, anio y categoria' });
+  const { clause, params, join } = buildFiltros(parsed.query);
+  const rows = db.prepare(`
+    SELECT v.marca as marca, SUM(v.um_hl) as hl FROM ventas v ${join}
+    WHERE v.categoria = ? AND v.mes = ? AND v.anio = ?${clause}
+    GROUP BY v.marca HAVING SUM(v.um_hl) >= 0.001
+    ORDER BY hl DESC
+  `).all(categoria, mes, anio, ...params);
+  sendJson(res, 200, rows.map(r => ({ marca: r.marca, hl: Math.round(r.hl * 1000) / 1000 })));
+});
+route('GET', '/api/ranking/clientes', async (req, res) => {
+  if (!requireAuth(req, res, ['admin', 'supervisor', 'vendedor'])) return;
+  const parsed = url.parse(req.url, true);
+  const mes = Number(parsed.query.mes);
+  const anio = Number(parsed.query.anio);
+  const categoria = parsed.query.categoria || '';
+  const marca = parsed.query.marca || '';
+  if (!mes || !anio || !categoria || !marca) return sendJson(res, 400, { error: 'Faltan parametros mes, anio, categoria y marca' });
+  const filtros = buildFiltros(parsed.query);
+  const rows = db.prepare(`
+    SELECT v.cliente_id as cliente_id, c.razon_social as razon_social, c.domicilio as domicilio, SUM(v.um_hl) as hl
+    FROM ventas v LEFT JOIN clientes c ON c.cliente_id = v.cliente_id
+    WHERE v.categoria = ? AND v.marca = ? AND v.mes = ? AND v.anio = ?${filtros.clause}
+    GROUP BY v.cliente_id HAVING SUM(v.um_hl) >= 0.001
+    ORDER BY hl DESC LIMIT 15
+  `).all(categoria, marca, mes, anio, ...filtros.params);
+  sendJson(res, 200, rows.map(r => ({
+    cliente_id: r.cliente_id,
+    razon_social: r.razon_social || '',
+    domicilio: r.domicilio || '',
+    hl: Math.round(r.hl * 1000) / 1000,
+  })));
+});
+
+route('GET', '/api/referencia/supervisores', async (req, res) => {
+  if (!requireAuth(req, res, ['admin', 'supervisor', 'vendedor'])) return;
+  const row = db.prepare('SELECT value FROM meta WHERE key = ?').get('sup_ref_json');
+  let mapping = {};
+  if (row) { try { mapping = JSON.parse(row.value); } catch (e) { mapping = {}; } }
+  sendJson(res, 200, { mapping });
+  });
+route('POST', '/api/referencia/supervisores', async (req, res) => {
+  if (!requireAuth(req, res, ['admin'])) return;
+  const body = JSON.parse((await readBody(req)).toString('utf-8') || '{}');
+  if (!body.mapping || typeof body.mapping !== 'object') return sendJson(res, 400, { error: 'Falta mapping' });
+  db.prepare('INSERT OR REPLACE INTO meta (key, value) VALUES (?,?)').run('sup_ref_json', JSON.stringify(body.mapping));
+  sendJson(res, 200, { ok: true, cantidad: Object.keys(body.mapping).length });
+});
+
+route('GET', '/api/ranking/clientes-categoria', async (req, res) => {
+  if (!requireAuth(req, res, ['admin', 'supervisor', 'vendedor'])) return;
+  const parsed = url.parse(req.url, true);
+  const mes = Number(parsed.query.mes);
+  const anio = Number(parsed.query.anio);
+  const categoria = parsed.query.categoria || '';
+  const limit = Math.min(Number(parsed.query.limit) || 20, 100);
+  if (!mes || !anio || !categoria) return sendJson(res, 400, { error: 'Faltan parametros mes, anio y categoria' });
+  const filtros = buildFiltros(parsed.query);
+  const rows = db.prepare(`
+    SELECT v.cliente_id as cliente_id, c.razon_social as razon_social, c.domicilio as domicilio, SUM(v.um_hl) as hl
+    FROM ventas v LEFT JOIN clientes c ON c.cliente_id = v.cliente_id
+    WHERE v.categoria = ? AND v.mes = ? AND v.anio = ?${filtros.clause}
+    GROUP BY v.cliente_id HAVING SUM(v.um_hl) >= 0.001
+    ORDER BY hl DESC LIMIT ?
+  `).all(categoria, mes, anio, ...filtros.params, limit);
+  sendJson(res, 200, rows.map(r => ({
+    cliente_id: r.cliente_id,
+    razon_social: r.razon_social || '',
+    domicilio: r.domicilio || '',
+    hl: Math.round(r.hl * 1000) / 1000,
+  })));
+});
+
+route('GET', '/api/compradores', async (req, res) => {
+  if (!requireAuth(req, res, ['admin', 'supervisor', 'vendedor'])) return;
+  const parsed = url.parse(req.url, true);
+  const mes = Number(parsed.query.mes);
+  const anio = Number(parsed.query.anio);
+  if (!mes || !anio) return sendJson(res, 400, { error: 'Faltan parametros mes y anio' });
+  const { clause, params, join } = buildFiltros(parsed.query);
+  const CATS = ['Cervezas', 'Aguas', 'Vinos', 'Sidras'];
+  const resultado = {};
+  for (const cat of CATS) {
+    const rows = db.prepare(`
+      SELECT v.cliente_id FROM ventas v ${join}
+      WHERE v.categoria = ? AND v.mes = ? AND v.anio = ?${clause}
+      GROUP BY v.cliente_id HAVING SUM(v.um_hl) >= 0.001
+    `).all(cat, mes, anio, ...params);
+    resultado[cat] = rows.length;
+  }
+  const totalRows = db.prepare(`
+    SELECT DISTINCT v.cliente_id FROM ventas v ${join}
+    WHERE v.mes = ? AND v.anio = ?${clause}
+  `).all(mes, anio, ...params);
+  sendJson(res, 200, { categorias: resultado, total: totalRows.length });
+});
+
+function periodoMesAnterior(mes, anio) {
+  let mesAnteriorNum = mes - 1, anioMesAnterior = anio;
+  if (mesAnteriorNum < 1) { mesAnteriorNum = 12; anioMesAnterior = anio - 1; }
+  return { mesAnteriorNum, anioMesAnterior };
+}
+
+route('GET', '/api/canal', async (req, res) => {
+  if (!requireAuth(req, res, ['admin', 'supervisor', 'vendedor'])) return;
+  const parsed = url.parse(req.url, true);
+  const mes = Number(parsed.query.mes);
+  const anio = Number(parsed.query.anio);
+  if (!mes || !anio) return sendJson(res, 400, { error: 'Faltan parametros mes y anio' });
+  const { clause, params, join } = buildFiltros(parsed.query);
+  const { mesAnteriorNum, anioMesAnterior } = periodoMesAnterior(mes, anio);
+  const CATS = ['Cervezas', 'Aguas', 'Vinos', 'Sidras'];
+
+  function volumenPorCanal(mesQ, anioQ) {
+    const rows = db.prepare(`
+      SELECT v.canal as canal, v.categoria as categoria, SUM(v.um_hl) as hl
+      FROM ventas v ${join}
+      WHERE v.mes = ? AND v.anio = ?${clause}
+      GROUP BY v.canal, v.categoria
+    `).all(mesQ, anioQ, ...params);
+    const out = {};
+    for (const r of rows) {
+      const canal = r.canal || 'SIN CANAL';
+      if (!out[canal]) out[canal] = {};
+      out[canal][r.categoria] = r.hl || 0;
+    }
+    return out;
+  }
+
+  const actualData = volumenPorCanal(mes, anio);
+  const anioAnteriorData = volumenPorCanal(mes, anio - 1);
+  const mesAnteriorData = volumenPorCanal(mesAnteriorNum, anioMesAnterior);
+  const canales = Array.from(new Set([
+    ...Object.keys(actualData), ...Object.keys(anioAnteriorData), ...Object.keys(mesAnteriorData),
+  ])).sort();
+
+  const r3 = (n) => Math.round((n || 0) * 1000) / 1000;
+  function armarFila(canal) {
+    const categorias = {};
+    let tA = 0, tAA = 0, tMA = 0;
+    for (const cat of CATS) {
+      const a = (actualData[canal] && actualData[canal][cat]) || 0;
+      const aa = (anioAnteriorData[canal] && anioAnteriorData[canal][cat]) || 0;
+      const ma = (mesAnteriorData[canal] && mesAnteriorData[canal][cat]) || 0;
+      categorias[cat] = { actual: r3(a), anio_anterior: r3(aa), mes_anterior: r3(ma) };
+      tA += a; tAA += aa; tMA += ma;
+    }
+    return { canal, categorias, total: { actual: r3(tA), anio_anterior: r3(tAA), mes_anterior: r3(tMA) } };
+  }
+
+  const filas = canales.map(armarFila);
+  const totalGeneral = { categorias: {}, total: { actual: 0, anio_anterior: 0, mes_anterior: 0 } };
+  for (const cat of CATS) {
+    let a = 0, aa = 0, ma = 0;
+    for (const f of filas) { a += f.categorias[cat].actual; aa += f.categorias[cat].anio_anterior; ma += f.categorias[cat].mes_anterior; }
+    totalGeneral.categorias[cat] = { actual: r3(a), anio_anterior: r3(aa), mes_anterior: r3(ma) };
+    totalGeneral.total.actual += a; totalGeneral.total.anio_anterior += aa; totalGeneral.total.mes_anterior += ma;
+  }
+  totalGeneral.total = { actual: r3(totalGeneral.total.actual), anio_anterior: r3(totalGeneral.total.anio_anterior), mes_anterior: r3(totalGeneral.total.mes_anterior) };
+
+  sendJson(res, 200, {
+    mes, anio, mes_anterior_num: mesAnteriorNum, anio_mes_anterior: anioMesAnterior,
+    filas, total_general: totalGeneral,
+  });
+});
+
+route('GET', '/api/canal-compradores', async (req, res) => {
+  if (!requireAuth(req, res, ['admin', 'supervisor', 'vendedor'])) return;
+  const parsed = url.parse(req.url, true);
+  const mes = Number(parsed.query.mes);
+  const anio = Number(parsed.query.anio);
+  if (!mes || !anio) return sendJson(res, 400, { error: 'Faltan parametros mes y anio' });
+  const { clause, params, join } = buildFiltros(parsed.query);
+  const { mesAnteriorNum, anioMesAnterior } = periodoMesAnterior(mes, anio);
+  const CATS = ['Cervezas', 'Aguas', 'Vinos', 'Sidras'];
+
+  function compradoresPorCanal(mesQ, anioQ) {
+    const rows = db.prepare(`
+      SELECT canal, categoria, COUNT(*) as n FROM (
+        SELECT v.canal as canal, v.categoria as categoria, v.cliente_id as cliente_id, SUM(v.um_hl) as hl
+        FROM ventas v ${join}
+        WHERE v.mes = ? AND v.anio = ?${clause}
+        GROUP BY v.canal, v.categoria, v.cliente_id
+        HAVING SUM(v.um_hl) >= 0.001
+      ) GROUP BY canal, categoria
+    `).all(mesQ, anioQ, ...params);
+    const porCat = {};
+    for (const r of rows) {
+      const canal = r.canal || 'SIN CANAL';
+      if (!porCat[canal]) porCat[canal] = {};
+      porCat[canal][r.categoria] = r.n;
+    }
+    const totalRows = db.prepare(`
+      SELECT canal, COUNT(DISTINCT cliente_id) as n FROM ventas v ${join}
+      WHERE v.mes = ? AND v.anio = ?${clause}
+      GROUP BY v.canal
+    `).all(mesQ, anioQ, ...params);
+    const totales = {};
+    for (const r of totalRows) totales[r.canal || 'SIN CANAL'] = r.n;
+    return { porCat, totales };
+  }
+
+  function totalPorCategoria(mesQ, anioQ) {
+    const rows = db.prepare(`
+      SELECT categoria, COUNT(*) as n FROM (
+        SELECT v.categoria as categoria, v.cliente_id as cliente_id, SUM(v.um_hl) as hl
+        FROM ventas v ${join}
+        WHERE v.mes = ? AND v.anio = ?${clause}
+        GROUP BY v.categoria, v.cliente_id
+        HAVING SUM(v.um_hl) >= 0.001
+      ) GROUP BY categoria
+    `).all(mesQ, anioQ, ...params);
+    const out = {};
+    for (const r of rows) out[r.categoria] = r.n;
+    return out;
+  }
+  function totalGeneralClientes(mesQ, anioQ) {
+    const row = db.prepare(`SELECT COUNT(DISTINCT cliente_id) as n FROM ventas v ${join} WHERE v.mes = ? AND v.anio = ?${clause}`).get(mesQ, anioQ, ...params);
+    return row.n || 0;
+  }
+
+  const actualData = compradoresPorCanal(mes, anio);
+  const anioAnteriorData = compradoresPorCanal(mes, anio - 1);
+  const mesAnteriorData = compradoresPorCanal(mesAnteriorNum, anioMesAnterior);
+  const canales = Array.from(new Set([
+    ...Object.keys(actualData.totales), ...Object.keys(anioAnteriorData.totales), ...Object.keys(mesAnteriorData.totales),
+  ])).sort();
+
+  function armarFila(canal) {
+    const categorias = {};
+    for (const cat of CATS) {
+      categorias[cat] = {
+        actual: (actualData.porCat[canal] && actualData.porCat[canal][cat]) || 0,
+        anio_anterior: (anioAnteriorData.porCat[canal] && anioAnteriorData.porCat[canal][cat]) || 0,
+        mes_anterior: (mesAnteriorData.porCat[canal] && mesAnteriorData.porCat[canal][cat]) || 0,
+      };
+    }
+    return {
+      canal, categorias,
+      total: {
+        actual: actualData.totales[canal] || 0,
+        anio_anterior: anioAnteriorData.totales[canal] || 0,
+        mes_anterior: mesAnteriorData.totales[canal] || 0,
+      },
+    };
+  }
+
+  const filas = canales.map(armarFila);
+  const totalCatActual = totalPorCategoria(mes, anio);
+  const totalCatAnioAnt = totalPorCategoria(mes, anio - 1);
+  const totalCatMesAnt = totalPorCategoria(mesAnteriorNum, anioMesAnterior);
+  const totalGeneral = {
+    categorias: {},
+    total: {
+      actual: totalGeneralClientes(mes, anio),
+      anio_anterior: totalGeneralClientes(mes, anio - 1),
+      mes_anterior: totalGeneralClientes(mesAnteriorNum, anioMesAnterior),
+    },
+  };
+  for (const cat of CATS) {
+    totalGeneral.categorias[cat] = {
+      actual: totalCatActual[cat] || 0,
+      anio_anterior: totalCatAnioAnt[cat] || 0,
+      mes_anterior: totalCatMesAnt[cat] || 0,
+    };
+  }
+
+  sendJson(res, 200, {
+    mes, anio, mes_anterior_num: mesAnteriorNum, anio_mes_anterior: anioMesAnterior,
+    filas, total_general: totalGeneral,
+  });
+});
+
+// Volumen (HL) por marca y canal, para UNA categoria a la vez (Cervezas, Aguas,
+// Vinos o Sidras). Misma logica que /api/canal pero agrupando por v.marca en
+// vez de v.categoria, y los "grupos" de columnas son los canales (dinamicos,
+// se descubren con SELECT DISTINCT en vez de estar hardcodeados).
+route('GET', '/api/marca-canal', async (req, res) => {
+  if (!requireAuth(req, res, ['admin', 'supervisor', 'vendedor'])) return;
+  const parsed = url.parse(req.url, true);
+  const mes = Number(parsed.query.mes);
+  const anio = Number(parsed.query.anio);
+  const categoria = parsed.query.categoria || '';
+  if (!mes || !anio || !categoria) return sendJson(res, 400, { error: 'Faltan parametros mes, anio y categoria' });
+  const { clause, params, join } = buildFiltros(parsed.query);
+  const { mesAnteriorNum, anioMesAnterior } = periodoMesAnterior(mes, anio);
+
+  function volumenPorMarca(mesQ, anioQ) {
+    const rows = db.prepare(`
+      SELECT v.marca as marca, v.canal as canal, SUM(v.um_hl) as hl
+      FROM ventas v ${join}
+      WHERE v.categoria = ? AND v.mes = ? AND v.anio = ?${clause}
+      GROUP BY v.marca, v.canal
+    `).all(categoria, mesQ, anioQ, ...params);
+    const out = {};
+    for (const r of rows) {
+      const marca = r.marca || 'SIN MARCA';
+      const canal = r.canal || 'SIN CANAL';
+      if (!out[marca]) out[marca] = {};
+      out[marca][canal] = r.hl || 0;
+    }
+    return out;
+  }
+
+  const actualData = volumenPorMarca(mes, anio);
+  const anioAnteriorData = volumenPorMarca(mes, anio - 1);
+  const mesAnteriorData = volumenPorMarca(mesAnteriorNum, anioMesAnterior);
+  const marcas = Array.from(new Set([
+    ...Object.keys(actualData), ...Object.keys(anioAnteriorData), ...Object.keys(mesAnteriorData),
+  ])).sort();
+  const canales = Array.from(new Set([
+    ...Object.values(actualData).flatMap(o => Object.keys(o)),
+    ...Object.values(anioAnteriorData).flatMap(o => Object.keys(o)),
+    ...Object.values(mesAnteriorData).flatMap(o => Object.keys(o)),
+  ])).sort();
+
+  const r3 = (n) => Math.round((n || 0) * 1000) / 1000;
+  function armarFila(marca) {
+    const porGrupo = {};
+    let tA = 0, tAA = 0, tMA = 0;
+    for (const canal of canales) {
+      const a = (actualData[marca] && actualData[marca][canal]) || 0;
+      const aa = (anioAnteriorData[marca] && anioAnteriorData[marca][canal]) || 0;
+      const ma = (mesAnteriorData[marca] && mesAnteriorData[marca][canal]) || 0;
+      porGrupo[canal] = { actual: r3(a), anio_anterior: r3(aa), mes_anterior: r3(ma) };
+      tA += a; tAA += aa; tMA += ma;
+    }
+    return { nombre: marca, porGrupo, total: { actual: r3(tA), anio_anterior: r3(tAA), mes_anterior: r3(tMA) } };
+  }
+
+  const filas = marcas.map(armarFila).sort((a, b) => b.total.actual - a.total.actual);
+  const totalGeneral = { porGrupo: {}, total: { actual: 0, anio_anterior: 0, mes_anterior: 0 } };
+  for (const canal of canales) {
+    let a = 0, aa = 0, ma = 0;
+    for (const f of filas) { a += f.porGrupo[canal].actual; aa += f.porGrupo[canal].anio_anterior; ma += f.porGrupo[canal].mes_anterior; }
+    totalGeneral.porGrupo[canal] = { actual: r3(a), anio_anterior: r3(aa), mes_anterior: r3(ma) };
+    totalGeneral.total.actual += a; totalGeneral.total.anio_anterior += aa; totalGeneral.total.mes_anterior += ma;
+  }
+  totalGeneral.total = { actual: r3(totalGeneral.total.actual), anio_anterior: r3(totalGeneral.total.anio_anterior), mes_anterior: r3(totalGeneral.total.mes_anterior) };
+
+  sendJson(res, 200, {
+    mes, anio, mes_anterior_num: mesAnteriorNum, anio_mes_anterior: anioMesAnterior,
+    grupos: canales, filas, total_general: totalGeneral,
+  });
+});
+
+// Compradores (clientes distintos) por marca y canal, para UNA categoria a la
+// vez. Misma idea que /api/marca-canal pero contando clientes en vez de sumar HL.
+route('GET', '/api/marca-canal-compradores', async (req, res) => {
+  if (!requireAuth(req, res, ['admin', 'supervisor', 'vendedor'])) return;
+  const parsed = url.parse(req.url, true);
+  const mes = Number(parsed.query.mes);
+  const anio = Number(parsed.query.anio);
+  const categoria = parsed.query.categoria || '';
+  if (!mes || !anio || !categoria) return sendJson(res, 400, { error: 'Faltan parametros mes, anio y categoria' });
+  const { clause, params, join } = buildFiltros(parsed.query);
+  const { mesAnteriorNum, anioMesAnterior } = periodoMesAnterior(mes, anio);
+
+  function compradoresPorMarca(mesQ, anioQ) {
+    const rows = db.prepare(`
+      SELECT marca, canal, COUNT(*) as n FROM (
+        SELECT v.marca as marca, v.canal as canal, v.cliente_id as cliente_id, SUM(v.um_hl) as hl
+        FROM ventas v ${join}
+        WHERE v.categoria = ? AND v.mes = ? AND v.anio = ?${clause}
+        GROUP BY v.marca, v.canal, v.cliente_id
+        HAVING SUM(v.um_hl) >= 0.001
+      ) GROUP BY marca, canal
+    `).all(categoria, mesQ, anioQ, ...params);
+    const out = {};
+    for (const r of rows) {
+      const marca = r.marca || 'SIN MARCA';
+      const canal = r.canal || 'SIN CANAL';
+      if (!out[marca]) out[marca] = {};
+      out[marca][canal] = r.n;
+    }
+    return out;
+  }
+
+  const actualData = compradoresPorMarca(mes, anio);
+  const anioAnteriorData = compradoresPorMarca(mes, anio - 1);
+  const mesAnteriorData = compradoresPorMarca(mesAnteriorNum, anioMesAnterior);
+  const marcas = Array.from(new Set([
+    ...Object.keys(actualData), ...Object.keys(anioAnteriorData), ...Object.keys(mesAnteriorData),
+  ])).sort();
+  const canales = Array.from(new Set([
+    ...Object.values(actualData).flatMap(o => Object.keys(o)),
+    ...Object.values(anioAnteriorData).flatMap(o => Object.keys(o)),
+    ...Object.values(mesAnteriorData).flatMap(o => Object.keys(o)),
+  ])).sort();
+
+  function armarFila(marca) {
+    const porGrupo = {};
+    for (const canal of canales) {
+      porGrupo[canal] = {
+        actual: (actualData[marca] && actualData[marca][canal]) || 0,
+        anio_anterior: (anioAnteriorData[marca] && anioAnteriorData[marca][canal]) || 0,
+        mes_anterior: (mesAnteriorData[marca] && mesAnteriorData[marca][canal]) || 0,
+      };
+    }
+    let tA = 0, tAA = 0, tMA = 0;
+    for (const canal of canales) { tA += porGrupo[canal].actual; tAA += porGrupo[canal].anio_anterior; tMA += porGrupo[canal].mes_anterior; }
+    return { nombre: marca, porGrupo, total: { actual: tA, anio_anterior: tAA, mes_anterior: tMA } };
+  }
+
+  const filas = marcas.map(armarFila).sort((a, b) => b.total.actual - a.total.actual);
+  const totalGeneral = { porGrupo: {}, total: { actual: 0, anio_anterior: 0, mes_anterior: 0 } };
+  for (const canal of canales) {
+    let a = 0, aa = 0, ma = 0;
+    for (const f of filas) { a += f.porGrupo[canal].actual; aa += f.porGrupo[canal].anio_anterior; ma += f.porGrupo[canal].mes_anterior; }
+    totalGeneral.porGrupo[canal] = { actual: a, anio_anterior: aa, mes_anterior: ma };
+    totalGeneral.total.actual += a; totalGeneral.total.anio_anterior += aa; totalGeneral.total.mes_anterior += ma;
+  }
+
+  sendJson(res, 200, {
+    mes, anio, mes_anterior_num: mesAnteriorNum, anio_mes_anterior: anioMesAnterior,
+    grupos: canales, filas, total_general: totalGeneral,
+  });
+});
+
+const MIME = {
+  '.html': 'text/html; charset=utf-8',
+  '.js': 'application/javascript; charset=utf-8',
+  '.css': 'text/css; charset=utf-8',
+  '.json': 'application/json; charset=utf-8',
+  '.png': 'image/png',
+  '.svg': 'image/svg+xml',
+  '.webmanifest': 'application/manifest+json',
+};
+function serveStatic(req, res, pathname) {
+  let filePath = path.join(PUBLIC_DIR, pathname === '/' ? 'index.html' : pathname);
+  if (!filePath.startsWith(PUBLIC_DIR)) { res.writeHead(403); res.end(); return; }
+  fs.readFile(filePath, (err, data) => {
+    if (err) {
+      fs.readFile(path.join(PUBLIC_DIR, 'index.html'), (err2, data2) => {
+        if (err2) { res.writeHead(404); res.end('Not found'); return; }
+        res.writeHead(200, { 'Content-Type': MIME['.html'] });
+        res.end(data2);
+      });
+      return;
+    }
+    const ext = path.extname(filePath);
+    res.writeHead(200, { 'Content-Type': MIME[ext] || 'application/octet-stream' });
+    res.end(data);
+  });
+}
+const server = http.createServer(async (req, res) => {
+  const parsed = url.parse(req.url, true);
+  const pathname = parsed.pathname;
+  if (req.method === 'OPTIONS') {
+    res.writeHead(204, {
+      'Access-Control-Allow-Origin': '*',
+      'Access-Control-Allow-Methods': 'GET,POST,DELETE,OPTIONS',
+      'Access-Control-Allow-Headers': 'Content-Type, Authorization',
+    });
+    return res.end();
+  }
+  if (pathname.startsWith('/api/')) {
+    const match = matchRoute(req.method, pathname);
+    if (!match) return sendJson(res, 404, { error: 'Ruta no encontrada' });
+    try {
+      await match.handler(req, res, match.params);
+    } catch (e) {
+      console.error(e);
+      sendJson(res, 500, { error: 'Error interno: ' + e.message });
+    }
+    return;
+  }
+  serveStatic(req, res, pathname);
+});
+(function autoSeed(){
+  const count = db.prepare('SELECT COUNT(*) as n FROM users').get().n;
+  if (count === 0) {
+    authLib.createUser('surdorado', 'luca1901', 'admin');
+    authLib.createUser('vendedores', 'vende2026', 'vendedor');
+    console.log('Auto-seed: usuarios iniciales creados (surdorado / vendedores).');
+  }
+})();
+server.listen(PORT, () => {
+  console.log(`Servidor escuchando en puerto ${PORT}`);
+});
+module.exports = server;
