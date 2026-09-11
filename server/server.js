@@ -134,6 +134,21 @@ route('GET', '/api/clientes', async (req, res) => {
     clientes,
   });
 });
+route('GET', '/api/clientes/categoria', async (req, res) => {
+  if (!requireAuth(req, res, ['admin', 'supervisor', 'vendedor'])) return;
+  const parsed = url.parse(req.url, true);
+  const vendedor = parsed.query.vendedor || '';
+  const dia = parsed.query.dia || '';
+  const categoria = parsed.query.categoria || '';
+  const rows = db.prepare(`
+    SELECT c.cliente_id, c.razon_social, c.domicilio FROM clientes c
+    JOIN ventas v ON v.cliente_id = c.cliente_id
+    WHERE c.personal_comercial = ? AND c.dias_visita = ? AND v.categoria = ?
+    GROUP BY c.cliente_id HAVING SUM(v.um_hl) >= 0.001
+    ORDER BY c.razon_social
+  `).all(vendedor, dia, categoria);
+  sendJson(res, 200, rows);
+});
 route('GET', '/api/cliente/:id', async (req, res, params) => {
   if (!requireAuth(req, res, ['admin', 'supervisor', 'vendedor'])) return;
   const cliente = db.prepare('SELECT * FROM clientes WHERE cliente_id = ?').get(params.id);
