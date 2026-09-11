@@ -148,10 +148,30 @@ route('GET', '/api/clientes', async (req, res) => {
     `).all(vendedor, dia, cat, ...periodoParams);
     compradoresPorCat[cat] = rows.length;
   }
+  // Categorias compradas por cada cliente (para el dibujito del lado
+  // derecho en el listado principal): una sola consulta agrupada en vez de
+  // una por cliente.
+  const catPorClienteRows = db.prepare(`
+    SELECT v.cliente_id as cliente_id, v.categoria as categoria FROM ventas v
+    JOIN clientes c ON c.cliente_id = v.cliente_id
+    WHERE c.personal_comercial = ? AND c.dias_visita = ?${periodoClause}
+    GROUP BY v.cliente_id, v.categoria HAVING SUM(v.um_hl) >= 0.001
+  `).all(vendedor, dia, ...periodoParams);
+  const catPorCliente = {};
+  for (const r of catPorClienteRows) {
+    if (!catPorCliente[r.cliente_id]) catPorCliente[r.cliente_id] = [];
+    catPorCliente[r.cliente_id].push(r.categoria);
+  }
+  const clientesConCategorias = clientes.map(c => ({
+    cliente_id: c.cliente_id,
+    razon_social: c.razon_social,
+    domicilio: c.domicilio,
+    categorias: catPorCliente[c.cliente_id] || [],
+  }));
   sendJson(res, 200, {
     total_clientes: clientes.length,
     compradores_por_categoria: compradoresPorCat,
-    clientes,
+    clientes: clientesConCategorias,
   });
 });
 route('GET', '/api/clientes/categoria', async (req, res) => {
