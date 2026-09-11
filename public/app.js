@@ -219,7 +219,10 @@ function renderCategoriaClientes(list) {
         <div class="addr">${escapeHtml(c.domicilio || '')}</div>
         <div class="code">Código: ${escapeHtml(c.cliente_id)}</div>
       </div>
-      <div class="arrow">›</div>
+      <div class="right-side">
+        <div class="cat-badges">${(c.categorias || []).map(cat => `<span class="cat-badge" title="${escapeHtml(cat)}">${CAT_ICONS[cat] || ''}</span>`).join('')}</div>
+        <div class="arrow">›</div>
+      </div>
     </div>
   `).join('');
   content.querySelectorAll('.client-item').forEach(item => {
