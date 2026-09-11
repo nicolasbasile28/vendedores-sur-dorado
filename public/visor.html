@@ -460,11 +460,22 @@ async function doLogin(){
       document.getElementById('adminConfigSection').style.display = 'block';
       document.getElementById('adminSupRefSection').style.display = 'block';
       document.getElementById('adminUsersSection').style.display = 'block';
+      document.getElementById('cambiarPassSection').style.display = '';
+      document.getElementById('tabBtnVolumen').style.display = '';
+      document.getElementById('tabBtnCompradores').style.display = '';
+      showTab('volumen');
+      await initPeriodoYKpis();
+      loadFiltrosOpciones();
+      loadDiasConfig();
+      loadUsuarios();
+    } else {
+      // Supervisor (y cualquier otro rol no-admin que llegue aca): solo puede
+      // ver la seccion de subir el archivo de venta del dia, nada mas.
+      document.getElementById('cambiarPassSection').style.display = 'none';
+      document.getElementById('tabBtnVolumen').style.display = 'none';
+      document.getElementById('tabBtnCompradores').style.display = 'none';
+      showTab('config');
     }
-    showTab('volumen');
-    await initPeriodoYKpis();
-    loadFiltrosOpciones();
-    if(ROLE === 'admin'){ loadDiasConfig(); loadUsuarios(); }
   }catch(e){
     showMsg('loginMsg', 'No se pudo conectar al servidor: ' + e.message, false);
   }
