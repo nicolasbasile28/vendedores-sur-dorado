@@ -1067,31 +1067,52 @@ async function loadCompradores(){
   const area = document.getElementById('compradoresArea');
   area.innerHTML = '<div class="loading">Cargando...</div>';
   try{
-    const res = await fetch(API + `/api/compradores?mes=${CURRENT_MES}&anio=${CURRENT_ANIO}${filtrosQueryString()}`, {headers: authHeaders()});
+    const res = await fetch(API + `/api/kpis-compradores?mes=${CURRENT_MES}&anio=${CURRENT_ANIO}${filtrosQueryString()}`, {headers: authHeaders()});
     const data = await res.json();
     if(!res.ok){ area.innerHTML = '<div class="loading">' + (data.error||'Error') + '</div>'; return; }
-    const cats = ['Cervezas','Aguas','Vinos','Sidras'];
-    const max = Math.max(data.total, 1);
-    let html = '';
-    for(const cat of cats){
-      const n = data.categorias[cat] || 0;
-      const pct = max > 0 ? (n / max * 100) : 0;
-      html += `
-        <div style="margin-bottom:10px; cursor:pointer;" onclick="loadCompradoresDrill('${cat}')">
-          <div style="display:flex; justify-content:space-between; font-size:13px; margin-bottom:3px;">
-            <span>${catLabel(cat)}</span><span style="color:var(--text2);">${n} clientes</span>
-          </div>
-          <div style="background:var(--card2); border-radius:4px; height:10px; overflow:hidden;">
-            <div style="background:var(--dorado); height:100%; width:${pct}%;"></div>
-          </div>
-        </div>
-      `;
-    }
-    html += `<p class="note">Total de clientes compradores (cualquier categoría): <strong>${data.total}</strong></p>`;
-    area.innerHTML = html;
+    renderKpisCompradores(data);
   }catch(e){
     area.innerHTML = '<div class="loading">Error: ' + e.message + '</div>';
   }
+}
+
+// Mismo layout que renderKpis() (Volumen) pero contando clientes compradores
+// distintos en vez de sumar HL. Cada card mantiene el click para ir al
+// listado de clientes de esa categoria (loadCompradoresDrill).
+function renderKpisCompradores(data){
+  const area = document.getElementById('compradoresArea');
+  const cats = ['Cervezas','Aguas','Vinos','Sidras'];
+  let html = '<div class="kpi-grid">';
+  for(const cat of cats){
+    const k = data.categorias[cat] || {};
+    const varPct = k.variacion_pct;
+    let badgeClass = 'neutral', badgeText = 'Sin dato año anterior';
+    if(varPct !== null && varPct !== undefined){
+      badgeClass = varPct >= 0 ? 'up' : 'down';
+      badgeText = (varPct >= 0 ? '+' : '') + varPct + '% vs ' + (data.anio-1);
+    }
+    const varMesPct = k.variacion_mes_pct;
+    let badgeClassMes = 'neutral', badgeTextMes = 'Sin dato mes anterior';
+    if(varMesPct !== null && varMesPct !== undefined){
+      badgeClassMes = varMesPct >= 0 ? 'up' : 'down';
+      badgeTextMes = (varMesPct >= 0 ? '+' : '') + varMesPct + '% vs mes anterior';
+    }
+    html += `
+      <div class="kpi-card" style="cursor:pointer;" onclick="loadCompradoresDrill('${cat}')">
+        <h3>${catLabel(cat)}</h3>
+        <div class="kpi-main">${fmtInt(k.actual)}</div>
+        <div class="kpi-sub">Compradores ${NOMBRES_MES[data.mes]} ${data.anio}</div>
+        <div class="kpi-row"><span>Proyectado</span><span>${k.proyectado !== null ? fmtInt(k.proyectado) : 'Cargar dias configurados'}</span></div>
+        <div class="kpi-row"><span>${NOMBRES_MES[data.mes_anterior_num]} ${data.anio_mes_anterior}</span><span>${fmtInt(k.mes_anterior)}</span></div>
+        <div class="kpi-row"><span>Variación vs mes anterior</span><span class="badge ${badgeClassMes}">${badgeTextMes}</span></div>
+        <div class="kpi-row"><span>${NOMBRES_MES[data.mes]} ${data.anio-1}</span><span>${fmtInt(k.anio_anterior)}</span></div>
+        <div class="kpi-row"><span>Variación vs año anterior</span><span class="badge ${badgeClass}">${badgeText}</span></div>
+      </div>
+    `;
+  }
+  html += '</div>';
+  html += `<p class="note">Días de venta transcurridos: ${data.dias_venta_reales ?? '-'} · Días configurados: ${data.dias_configurados ?? '-'}</p>`;
+  area.innerHTML = html;
 }
 
 async function loadCompradoresDrill(categoria){
