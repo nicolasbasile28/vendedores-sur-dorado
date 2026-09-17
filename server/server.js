@@ -749,6 +749,63 @@ route('GET', '/api/kpis', async (req, res) => {
     categorias: resultado,
   });
 });
+// Mismo cuadro que /api/kpis (actual, proyectado, mes anterior, año anterior
+// y sus variaciones) pero contando CLIENTES DISTINTOS por categoria en vez de
+// sumar HL. Usa un umbral mas chico (0.0001, contra 0.001 en el resto de la
+// app) a pedido puntual del usuario para este cuadro.
+route('GET', '/api/kpis-compradores', async (req, res) => {
+  if (!requireAuth(req, res, ['admin', 'supervisor', 'vendedor'])) return;
+  const parsed = url.parse(req.url, true);
+  const mes = Number(parsed.query.mes);
+  const anio = Number(parsed.query.anio);
+  if (!mes || !anio) return sendJson(res, 400, { error: 'Faltan parametros mes y anio' });
+  const { clause, params, join } = buildFiltros(parsed.query);
+
+  const diasConfigRow = db.prepare('SELECT value FROM meta WHERE key = ?').get('dias_configurados');
+  const diasConfigurados = diasConfigRow ? Number(diasConfigRow.value) : null;
+  const diasRealesRow = db.prepare('SELECT value FROM meta WHERE key = ?').get(`dias_reales_${anio}_${String(mes).padStart(2, '0')}`);
+  const diasReales = diasRealesRow ? Number(diasRealesRow.value) : null;
+
+  let mesAnteriorNum = mes - 1, anioMesAnterior = anio;
+  if (mesAnteriorNum < 1) { mesAnteriorNum = 12; anioMesAnterior = anio - 1; }
+
+  const CATS = ['Cervezas', 'Aguas', 'Vinos', 'Sidras'];
+  function contarCompradores(cat, mesQ, anioQ) {
+    const row = db.prepare(`
+      SELECT COUNT(*) as n FROM (
+        SELECT v.cliente_id FROM ventas v ${join}
+        WHERE v.categoria = ? AND v.mes = ? AND v.anio = ?${clause}
+        GROUP BY v.cliente_id HAVING SUM(v.um_hl) >= 0.0001
+      )
+    `).get(cat, mesQ, anioQ, ...params);
+    return row.n || 0;
+  }
+  const resultado = {};
+  for (const cat of CATS) {
+    const actual = contarCompradores(cat, mes, anio);
+    const anterior = contarCompradores(cat, mes, anio - 1);
+    const mesAnterior = contarCompradores(cat, mesAnteriorNum, anioMesAnterior);
+    const proyectado = (diasReales && diasConfigurados) ? (actual / diasReales * diasConfigurados) : null;
+    const variacionPct = anterior > 0 ? ((actual - anterior) / anterior * 100) : null;
+    const variacionMesPct = mesAnterior > 0 ? ((actual - mesAnterior) / mesAnterior * 100) : null;
+    resultado[cat] = {
+      actual,
+      anio_anterior: anterior,
+      mes_anterior: mesAnterior,
+      proyectado: proyectado !== null ? Math.round(proyectado) : null,
+      variacion_pct: variacionPct !== null ? Math.round(variacionPct * 10) / 10 : null,
+      variacion_mes_pct: variacionMesPct !== null ? Math.round(variacionMesPct * 10) / 10 : null,
+    };
+  }
+  sendJson(res, 200, {
+    mes, anio,
+    mes_anterior_num: mesAnteriorNum,
+    anio_mes_anterior: anioMesAnterior,
+    dias_configurados: diasConfigurados,
+    dias_venta_reales: diasReales,
+    categorias: resultado,
+  });
+});
 route('GET', '/api/meta', async (req, res) => {
   if (!requireAuth(req, res, ['admin', 'supervisor', 'vendedor'])) return;
   const rows = db.prepare('SELECT key, value FROM meta').all();
@@ -946,6 +1003,15 @@ function periodoMesAnterior(mes, anio) {
   return { mesAnteriorNum, anioMesAnterior };
 }
 
+// "AMSTEL IPANEMA" y "AMSTEL LAGER" son la misma marca renombrada en algun
+// momento dentro de los datos historicos de ventas. Se unifican bajo un solo
+// nombre para que las comparaciones entre periodos (actual / mes anterior /
+// año anterior) en marca-canal no queden rotas por el cambio de nombre.
+function normalizarMarca(marca) {
+  if (marca === 'AMSTEL IPANEMA') return 'AMSTEL LAGER';
+  return marca;
+}
+
 route('GET', '/api/canal', async (req, res) => {
   if (!requireAuth(req, res, ['admin', 'supervisor', 'vendedor'])) return;
   const parsed = url.parse(req.url, true);
@@ -1139,10 +1205,10 @@ route('GET', '/api/marca-canal', async (req, res) => {
     `).all(categoria, mesQ, anioQ, ...params);
     const out = {};
     for (const r of rows) {
-      const marca = r.marca || 'SIN MARCA';
+      const marca = normalizarMarca(r.marca || 'SIN MARCA');
       const canal = r.canal || 'SIN CANAL';
       if (!out[marca]) out[marca] = {};
-      out[marca][canal] = r.hl || 0;
+      out[marca][canal] = (out[marca][canal] || 0) + (r.hl || 0);
     }
     return out;
   }
@@ -1204,10 +1270,12 @@ route('GET', '/api/marca-canal-compradores', async (req, res) => {
   function compradoresPorMarca(mesQ, anioQ) {
     const rows = db.prepare(`
       SELECT marca, canal, COUNT(*) as n FROM (
-        SELECT v.marca as marca, v.canal as canal, v.cliente_id as cliente_id, SUM(v.um_hl) as hl
+        SELECT
+          CASE WHEN v.marca = 'AMSTEL IPANEMA' THEN 'AMSTEL LAGER' ELSE v.marca END as marca,
+          v.canal as canal, v.cliente_id as cliente_id, SUM(v.um_hl) as hl
         FROM ventas v ${join}
         WHERE v.categoria = ? AND v.mes = ? AND v.anio = ?${clause}
-        GROUP BY v.marca, v.canal, v.cliente_id
+        GROUP BY marca, v.canal, v.cliente_id
         HAVING SUM(v.um_hl) >= 0.001
       ) GROUP BY marca, canal
     `).all(categoria, mesQ, anioQ, ...params);
