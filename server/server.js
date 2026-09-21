@@ -124,6 +124,17 @@ function periodoClauseFor(alias, mes, anio) {
   const col = alias ? alias + '.' : '';
   return ` AND ${col}mes = ? AND ${col}anio = ?`;
 }
+// Venta de estos 3 camioneros ("Descripcion Transporte" en el Excel, guardado
+// en ventas.camionero) es venta "por afuera" que no le entra al variable de
+// los vendedores - a pedido del usuario, esa venta tiene que dejar de existir
+// SOLO en la app de vendedores (compradores, HL, cobertura). El dashboard de
+// admin/supervisor (visor.html) sigue mostrando el total real, incluida esta
+// venta - por eso este filtro NO se toca en ninguna ruta de visor.html.
+const CAMIONEROS_EXCLUIDOS_APP = ['DIAZ LEANDRO PABLO', 'MASTROVITO LUIS DIEGO', 'RUIZ LUCAS GONZALO'];
+function camioneroExcluidoClause(alias) {
+  const col = alias ? alias + '.' : '';
+  return ` AND UPPER(TRIM(${col}camionero)) NOT IN (${CAMIONEROS_EXCLUIDOS_APP.map(() => '?').join(',')})`;
+}
 route('GET', '/api/clientes', async (req, res) => {
   if (!requireAuth(req, res, ['admin', 'supervisor', 'vendedor'])) return;
   const parsed = url.parse(req.url, true);
@@ -135,8 +146,8 @@ route('GET', '/api/clientes', async (req, res) => {
     ORDER BY razon_social
   `).all(vendedor, dia);
   const { mes, anio } = getPeriodoActual();
-  const periodoClause = periodoClauseFor('v', mes, anio);
-  const periodoParams = (mes && anio) ? [mes, anio] : [];
+  const periodoClause = periodoClauseFor('v', mes, anio) + camioneroExcluidoClause('v');
+  const periodoParams = (mes && anio) ? [mes, anio, ...CAMIONEROS_EXCLUIDOS_APP] : [...CAMIONEROS_EXCLUIDOS_APP];
   const CATS = ['Cervezas', 'Aguas', 'Vinos', 'Sidras'];
   const compradoresPorCat = {};
   for (const cat of CATS) {
@@ -181,9 +192,9 @@ route('GET', '/api/clientes/categoria', async (req, res) => {
   const dia = parsed.query.dia || '';
   const categoria = parsed.query.categoria || '';
   const { mes, anio } = getPeriodoActual();
-  const periodoClauseV = periodoClauseFor('v', mes, anio);
-  const periodoClausePlain = periodoClauseFor(null, mes, anio);
-  const periodoParams = (mes && anio) ? [mes, anio] : [];
+  const periodoClauseV = periodoClauseFor('v', mes, anio) + camioneroExcluidoClause('v');
+  const periodoClausePlain = periodoClauseFor(null, mes, anio) + camioneroExcluidoClause(null);
+  const periodoParams = (mes && anio) ? [mes, anio, ...CAMIONEROS_EXCLUIDOS_APP] : [...CAMIONEROS_EXCLUIDOS_APP];
   const rows = db.prepare(`
     SELECT c.cliente_id, c.razon_social, c.domicilio FROM clientes c
     JOIN ventas v ON v.cliente_id = c.cliente_id
@@ -211,8 +222,8 @@ route('GET', '/api/cliente/:id', async (req, res, params) => {
   const cliente = db.prepare('SELECT * FROM clientes WHERE cliente_id = ?').get(params.id);
   if (!cliente) return sendJson(res, 404, { error: 'Cliente no encontrado' });
   const { mes, anio } = getPeriodoActual();
-  const periodoClause = periodoClauseFor(null, mes, anio);
-  const periodoParams = (mes && anio) ? [mes, anio] : [];
+  const periodoClause = periodoClauseFor(null, mes, anio) + camioneroExcluidoClause(null);
+  const periodoParams = (mes && anio) ? [mes, anio, ...CAMIONEROS_EXCLUIDOS_APP] : [...CAMIONEROS_EXCLUIDOS_APP];
   const CATS = ['Cervezas', 'Aguas', 'Vinos', 'Sidras'];
   const resultado = {};
   for (const cat of CATS) {
@@ -229,8 +240,8 @@ route('GET', '/api/cliente/:id', async (req, res, params) => {
 route('GET', '/api/cliente/:id/marca/:marca', async (req, res, params) => {
   if (!requireAuth(req, res, ['admin', 'supervisor', 'vendedor'])) return;
   const { mes, anio } = getPeriodoActual();
-  const periodoClause = periodoClauseFor(null, mes, anio);
-  const periodoParams = (mes && anio) ? [mes, anio] : [];
+  const periodoClause = periodoClauseFor(null, mes, anio) + camioneroExcluidoClause(null);
+  const periodoParams = (mes && anio) ? [mes, anio, ...CAMIONEROS_EXCLUIDOS_APP] : [...CAMIONEROS_EXCLUIDOS_APP];
   const rows = db.prepare(`
     SELECT articulo, SUM(um_hl) as hl FROM ventas
     WHERE cliente_id = ? AND marca = ?${periodoClause}
