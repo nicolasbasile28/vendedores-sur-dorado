@@ -960,6 +960,37 @@ route('POST', '/api/referencia/supervisores', async (req, res) => {
   sendJson(res, 200, { ok: true, cantidad: Object.keys(body.mapping).length });
 });
 
+// Actualiza/agrega clientes a partir del archivo "universo" (maestro de
+// clientes del ERP, distinto del archivo de venta del dia). Solo admin -
+// a pedido del usuario, es la unica forma de que aparezcan clientes nuevos
+// en la app de vendedores (la carga de venta del dia NUNCA toca la tabla
+// clientes, ver guardarVentas/finalizarYGuardar mas arriba). Es un upsert
+// (INSERT OR REPLACE por cliente_id): un cliente que no este en este
+// archivo no se borra, solo se actualizan/agregan los que si vienen.
+route('POST', '/api/referencia/universo', async (req, res) => {
+  if (!requireAuth(req, res, ['admin'])) return;
+  const body = JSON.parse((await readBody(req)).toString('utf-8') || '{}');
+  if (!Array.isArray(body.clientes)) return sendJson(res, 400, { error: 'Falta clientes (array)' });
+  let cantidad = 0;
+  db.exec('BEGIN');
+  try {
+    const insCliente = db.prepare(`
+      INSERT OR REPLACE INTO clientes (cliente_id, razon_social, domicilio, personal_comercial, dias_visita)
+      VALUES (?,?,?,?,?)
+    `);
+    for (const c of body.clientes) {
+      if (!c || c.cliente_id === undefined || c.cliente_id === null || c.cliente_id === '') continue;
+      insCliente.run(String(c.cliente_id), c.razon_social || '', c.domicilio || '', c.personal_comercial || '', c.dias_visita || '');
+      cantidad++;
+    }
+    db.exec('COMMIT');
+  } catch (e) {
+    db.exec('ROLLBACK');
+    return sendJson(res, 500, { error: 'Error guardando clientes: ' + e.message });
+  }
+  sendJson(res, 200, { ok: true, cantidad });
+});
+
 route('GET', '/api/ranking/clientes-categoria', async (req, res) => {
   if (!requireAuth(req, res, ['admin', 'supervisor', 'vendedor'])) return;
   const parsed = url.parse(req.url, true);
