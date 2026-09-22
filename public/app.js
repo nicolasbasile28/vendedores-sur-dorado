@@ -189,7 +189,8 @@ document.getElementById('searchBox').addEventListener('input', (e) => {
   if (!q) { renderClientList(currentClientList); return; }
   const filtered = currentClientList.filter(c =>
     String(c.cliente_id).toLowerCase().includes(q) ||
-    (c.razon_social || '').toLowerCase().includes(q)
+    (c.razon_social || '').toLowerCase().includes(q) ||
+    (c.domicilio || '').toLowerCase().includes(q)
   );
   renderClientList(filtered);
 });
