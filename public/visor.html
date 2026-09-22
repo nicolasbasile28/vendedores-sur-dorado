@@ -354,7 +354,7 @@
   <div id="tabConfig" class="hidden">
 
     <div class="section" id="uploadVentasSection">
-      <h2>Actualizar archivo de ventas del día</h2>
+      <h2>Actualizar archivo de ventas del día <span id="ultimaActualizacionVentas" style="font-size:12px; font-weight:400; color:var(--text2);"></span></h2>
       <div class="config-row">
         <input type="file" id="fileVentasHoy" accept=".xlsx,.xls" style="background:var(--card2); color:var(--text); border:1px solid var(--border); padding:8px; border-radius:6px;">
         <button onclick="procesarVentasHoy()">Procesar y subir</button>
@@ -467,16 +467,22 @@ async function doLogin(){
     document.getElementById('mainScreen').classList.remove('hidden');
     document.getElementById('userLabel').textContent = USERNAME + ' (' + ROLE + ')';
     // El supervisor ve todo el dashboard (Volumen, Compradores) y en
-    // Configuracion puede subir el archivo de venta del dia. Las secciones
-    // de mapeo Vendedor-Supervisor, configuracion de dias y usuarios/
-    // contraseñas quedan ocultas (display:none por defecto en el HTML) y
-    // solo se muestran para admin.
-    if(ROLE === 'admin'){
-      document.getElementById('adminConfigSection').style.display = 'block';
-      document.getElementById('adminUniversoSection').style.display = 'block';
-      document.getElementById('adminSupRefSection').style.display = 'block';
-      document.getElementById('adminUsersSection').style.display = 'block';
-    }
+    // Configuracion solo puede subir el archivo de venta del dia y cambiar
+    // su propia contraseña. Las secciones de universo de clientes, mapeo
+    // Vendedor-Supervisor, configuracion de dias y usuarios son solo para
+    // admin - se fija el display en los DOS sentidos (block Y none) en cada
+    // login, no solo "block si admin", porque esta es una SPA: si antes en
+    // la misma pestaña habia una sesion de admin y despues se loguea otro
+    // usuario sin recargar la pagina, sin el "else" estas secciones (y sus
+    // mensajes de exito/error) quedaban pegadas de la sesion anterior.
+    const esAdmin = ROLE === 'admin';
+    document.getElementById('adminConfigSection').style.display = esAdmin ? 'block' : 'none';
+    document.getElementById('adminUniversoSection').style.display = esAdmin ? 'block' : 'none';
+    document.getElementById('adminSupRefSection').style.display = esAdmin ? 'block' : 'none';
+    document.getElementById('adminUsersSection').style.display = esAdmin ? 'block' : 'none';
+    // Limpia mensajes de exito/error que hayan quedado de una sesion previa
+    // en la misma pestaña (mismo motivo que arriba).
+    document.querySelectorAll('.msg').forEach(el => { el.textContent = ''; el.className = 'msg'; });
     showTab('volumen');
     await initPeriodoYKpis();
     loadFiltrosOpciones();
@@ -516,6 +522,15 @@ async function initPeriodoYKpis(){
     document.getElementById('mesInput').value = mesNum;
     document.getElementById('anioInput').value = anioNum;
     document.getElementById('periodoNote').textContent = meta.mes_actual ? ('Último dato cargado: ' + meta.mes_actual) : '';
+    const ultimaActEl = document.getElementById('ultimaActualizacionVentas');
+    if(ultimaActEl){
+      if(meta.last_upload){
+        const d = new Date(meta.last_upload);
+        ultimaActEl.textContent = '· Última actualización: ' + d.toLocaleString('es-AR', {day:'2-digit', month:'2-digit', year:'numeric', hour:'2-digit', minute:'2-digit'});
+      } else {
+        ultimaActEl.textContent = '';
+      }
+    }
     await loadKpis();
   }catch(e){
     document.getElementById('kpiArea').innerHTML = '<div class="loading">Error cargando periodo: ' + e.message + '</div>';
