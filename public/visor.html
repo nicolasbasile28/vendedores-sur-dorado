@@ -167,6 +167,7 @@
         <input id="anioInput" type="number" placeholder="Año" style="width:70px;">
         <button onclick="loadKpis()">Ver</button>
         <span id="periodoNote" style="font-size:12px;"></span>
+        <span id="diasProgresoNote" style="font-size:12px; color:var(--text2);"></span>
       </div>
 
       <div class="periodo" id="filtrosArea">
@@ -781,6 +782,24 @@ function renderKpis(data){
   html += '</div>';
   html += `<p class="note">Días de venta transcurridos: ${data.dias_venta_reales ?? '-'} · Días configurados: ${data.dias_configurados ?? '-'}</p>`;
   area.innerHTML = html;
+
+  // Barra de periodo (compartida entre Volumen y Compradores): dias
+  // trabajados (dias_venta_reales, calculado del archivo subido), dias
+  // configurados (el numero manual que carga el admin, ej 26) y cuantos
+  // faltan = configurados - trabajados. Se actualiza aca (no en
+  // renderKpisCompradores) porque ambos endpoints devuelven los mismos
+  // valores para el mismo periodo, y esta funcion siempre se llama primero.
+  const diasProgresoEl = document.getElementById('diasProgresoNote');
+  if(diasProgresoEl){
+    const trabajados = data.dias_venta_reales;
+    const configurados = data.dias_configurados;
+    if(trabajados !== null && trabajados !== undefined && configurados !== null && configurados !== undefined){
+      const faltan = configurados - trabajados;
+      diasProgresoEl.textContent = `· Días trabajados: ${trabajados} · Días del mes: ${configurados} · Faltan: ${faltan}`;
+    } else {
+      diasProgresoEl.textContent = '';
+    }
+  }
 }
 
 let CURRENT_MES = null, CURRENT_ANIO = null, CURRENT_DRILLDOWN = [];
@@ -1131,7 +1150,7 @@ async function procesarVentasHoy(){
       if(!statusRes.ok){ showMsg('uploadVentasMsg', data.error || 'Error procesando', false); return; }
       if(data.status === 'procesando') continue;
       showMsg('uploadVentasMsg', `Listo. ${data.mes_actual}: ${data.ventas} filas guardadas.`, true);
-      loadKpis();
+      initPeriodoYKpis();
       return;
     }
   }catch(e){
