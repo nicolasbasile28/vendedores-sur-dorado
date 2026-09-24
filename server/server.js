@@ -1358,12 +1358,53 @@ route('GET', '/api/marca-canal-compradores', async (req, res) => {
   }
 
   const filas = marcas.map(armarFila).sort((a, b) => b.total.actual - a.total.actual);
-  const totalGeneral = { porGrupo: {}, total: { actual: 0, anio_anterior: 0, mes_anterior: 0 } };
+
+  // El "Total general" NO es la suma de los compradores de cada marca: un
+  // cliente que compro 2 marcas de la categoria cuenta como 1 comprador, no
+  // como 2 (eso es lo que pasaba antes, sumando filas.porGrupo[canal], y
+  // por eso el total general daba mas alto que la cantidad real de
+  // compradores). Se cuenta clientes distintos directo por SQL - por canal
+  // (agrupando marcas) y en total (agrupando canales tambien), igual que
+  // hace /api/kpis-compradores para la tarjeta "Compradores" de arriba
+  // (mismo umbral 0.0001, para que el numero coincida con esa tarjeta).
+  function compradoresDistintosPorCanal(mesQ, anioQ) {
+    const porCanalRows = db.prepare(`
+      SELECT canal, COUNT(*) as n FROM (
+        SELECT v.canal as canal, v.cliente_id as cliente_id, SUM(v.um_hl) as hl
+        FROM ventas v ${join}
+        WHERE v.categoria = ? AND v.mes = ? AND v.anio = ?${clause}
+        GROUP BY v.canal, v.cliente_id
+        HAVING SUM(v.um_hl) >= 0.0001
+      ) GROUP BY canal
+    `).all(categoria, mesQ, anioQ, ...params);
+    const porCanal = {};
+    for (const r of porCanalRows) porCanal[r.canal || 'SIN CANAL'] = r.n;
+    const totalRow = db.prepare(`
+      SELECT COUNT(*) as n FROM (
+        SELECT v.cliente_id FROM ventas v ${join}
+        WHERE v.categoria = ? AND v.mes = ? AND v.anio = ?${clause}
+        GROUP BY v.cliente_id HAVING SUM(v.um_hl) >= 0.0001
+      )
+    `).get(categoria, mesQ, anioQ, ...params);
+    return { porCanal, total: totalRow.n || 0 };
+  }
+  const totalesActual = compradoresDistintosPorCanal(mes, anio);
+  const totalesAnioAnt = compradoresDistintosPorCanal(mes, anio - 1);
+  const totalesMesAnt = compradoresDistintosPorCanal(mesAnteriorNum, anioMesAnterior);
+  const totalGeneral = {
+    porGrupo: {},
+    total: {
+      actual: totalesActual.total,
+      anio_anterior: totalesAnioAnt.total,
+      mes_anterior: totalesMesAnt.total,
+    },
+  };
   for (const canal of canales) {
-    let a = 0, aa = 0, ma = 0;
-    for (const f of filas) { a += f.porGrupo[canal].actual; aa += f.porGrupo[canal].anio_anterior; ma += f.porGrupo[canal].mes_anterior; }
-    totalGeneral.porGrupo[canal] = { actual: a, anio_anterior: aa, mes_anterior: ma };
-    totalGeneral.total.actual += a; totalGeneral.total.anio_anterior += aa; totalGeneral.total.mes_anterior += ma;
+    totalGeneral.porGrupo[canal] = {
+      actual: totalesActual.porCanal[canal] || 0,
+      anio_anterior: totalesAnioAnt.porCanal[canal] || 0,
+      mes_anterior: totalesMesAnt.porCanal[canal] || 0,
+    };
   }
 
   sendJson(res, 200, {
