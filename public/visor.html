@@ -66,6 +66,14 @@
     background:var(--bordo); color:#fff; border:none; padding:7px 14px;
     border-radius:6px; cursor:pointer; font-size:13px;
   }
+  .dias-progreso{
+    display:flex; gap:10px; flex-wrap:wrap; align-items:center; margin-bottom:18px;
+  }
+  .dias-progreso .item{
+    background:var(--card); border:1px solid var(--border); border-radius:8px;
+    padding:8px 14px; font-size:13px; color:var(--text2);
+  }
+  .dias-progreso .item b{color:var(--dorado); font-size:17px; margin-left:6px;}
   .kpi-grid{
     display:grid; grid-template-columns:repeat(auto-fit, minmax(220px,1fr));
     gap:16px; margin-bottom:24px;
@@ -167,7 +175,12 @@
         <input id="anioInput" type="number" placeholder="Año" style="width:70px;">
         <button onclick="loadKpis()">Ver</button>
         <span id="periodoNote" style="font-size:12px;"></span>
-        <span id="diasProgresoNote" style="font-size:12px; color:var(--text2);"></span>
+      </div>
+
+      <div class="dias-progreso hidden" id="diasProgresoBar">
+        <span class="item">Días trabajados<b id="diasProgresoTrabajados">-</b></span>
+        <span class="item">Días del mes<b id="diasProgresoConfigurados">-</b></span>
+        <span class="item">Faltan<b id="diasProgresoFaltan">-</b></span>
       </div>
 
       <div class="periodo" id="filtrosArea">
@@ -789,15 +802,17 @@ function renderKpis(data){
   // faltan = configurados - trabajados. Se actualiza aca (no en
   // renderKpisCompradores) porque ambos endpoints devuelven los mismos
   // valores para el mismo periodo, y esta funcion siempre se llama primero.
-  const diasProgresoEl = document.getElementById('diasProgresoNote');
-  if(diasProgresoEl){
+  const diasProgresoBar = document.getElementById('diasProgresoBar');
+  if(diasProgresoBar){
     const trabajados = data.dias_venta_reales;
     const configurados = data.dias_configurados;
     if(trabajados !== null && trabajados !== undefined && configurados !== null && configurados !== undefined){
-      const faltan = configurados - trabajados;
-      diasProgresoEl.textContent = `· Días trabajados: ${trabajados} · Días del mes: ${configurados} · Faltan: ${faltan}`;
+      document.getElementById('diasProgresoTrabajados').textContent = trabajados;
+      document.getElementById('diasProgresoConfigurados').textContent = configurados;
+      document.getElementById('diasProgresoFaltan').textContent = configurados - trabajados;
+      diasProgresoBar.classList.remove('hidden');
     } else {
-      diasProgresoEl.textContent = '';
+      diasProgresoBar.classList.add('hidden');
     }
   }
 }
