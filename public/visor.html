@@ -163,7 +163,6 @@
           <div class="ms-panel hidden"></div>
         </div>
         <button onclick="limpiarMeses()" style="background:transparent; border:1px solid var(--border); color:var(--text2);">Limpiar</button>
-        <input id="anioInput" type="number" placeholder="Año" style="width:70px;">
         <button onclick="loadKpis()">Ver</button>
         <span id="periodoNote" style="font-size:12px;"></span>
       </div>
@@ -542,25 +541,43 @@ function authHeaders(){
   return {'Authorization': 'Bearer ' + TOKEN};
 }
 
+// El selector de periodo (multi-select "filtroMeses") muestra cada opcion
+// como par mes+año ("Noviembre 2025", value "2025-11"), no solo el mes -
+// esto permite armar rangos que crucen el fin de año (ej. Nov 2025 a Jun
+// 2026). Las opciones disponibles son las que realmente tienen datos
+// cargados (via /api/periodos-disponibles), asi que el usuario nunca puede
+// elegir un periodo sin datos.
+function periodoKey(anio, mes){ return anio + '-' + String(mes).padStart(2, '0'); }
+
 async function initPeriodoYKpis(){
   try{
-    const res = await fetch(API + '/api/meta', {headers: authHeaders()});
-    const meta = await res.json();
+    const [metaRes, periodosRes] = await Promise.all([
+      fetch(API + '/api/meta', {headers: authHeaders()}),
+      fetch(API + '/api/periodos-disponibles', {headers: authHeaders()}),
+    ]);
+    const meta = await metaRes.json();
+    const periodosDisponibles = periodosRes.ok ? await periodosRes.json() : [];
     const mesNum = Number(meta.mes_actual_num) || (new Date().getMonth()+1);
     const anioNum = Number(meta.anio_actual_num) || new Date().getFullYear();
-    DEFAULT_MES = mesNum;
-    const labelsMeses = {};
-    for(let m=1;m<=12;m++) labelsMeses[String(m)] = NOMBRES_MES[m];
-    fillMs('filtroMeses', Array.from({length:12}, (_,i) => String(i+1)), labelsMeses);
-    // Solo se preselecciona el mes actual si todavia no hay ninguno marcado
-    // (para no pisar la seleccion del usuario si initPeriodoYKpis se vuelve
-    // a llamar, ej. despues de subir el archivo de venta del dia).
+    DEFAULT_PERIODO = periodoKey(anioNum, mesNum);
+
+    let valores = (periodosDisponibles || []).map(p => periodoKey(p.anio, p.mes));
+    if(!valores.includes(DEFAULT_PERIODO)) valores.push(DEFAULT_PERIODO);
+    valores = Array.from(new Set(valores)).sort();
+    const labelsPeriodos = {};
+    for(const v of valores){
+      const [a, m] = v.split('-').map(Number);
+      labelsPeriodos[v] = NOMBRES_MES[m] + ' ' + a;
+    }
+    fillMs('filtroMeses', valores, labelsPeriodos);
+    // Solo se preselecciona el periodo actual si todavia no hay ninguno
+    // marcado (para no pisar la seleccion del usuario si initPeriodoYKpis se
+    // vuelve a llamar, ej. despues de subir el archivo de venta del dia).
     if(!MS_STATE['filtroMeses'] || MS_STATE['filtroMeses'].size === 0){
-      MS_STATE['filtroMeses'] = new Set([String(mesNum)]);
+      MS_STATE['filtroMeses'] = new Set([DEFAULT_PERIODO]);
       renderMsPanel('filtroMeses');
       updateMsButton('filtroMeses');
     }
-    document.getElementById('anioInput').value = anioNum;
     document.getElementById('periodoNote').textContent = meta.mes_actual ? ('Último dato cargado: ' + meta.mes_actual) : '';
     const ultimaActEl = document.getElementById('ultimaActualizacionVentas');
     if(ultimaActEl){
@@ -582,10 +599,9 @@ const ICONOS_CAT = { 'Cervezas':'🍺', 'Aguas':'💧', 'Vinos':'🍷', 'Sidras'
 function catLabel(cat){ return (ICONOS_CAT[cat] ? ICONOS_CAT[cat] + ' ' : '') + cat; }
 
 async function loadKpis(){
-  const meses = getMsValues('filtroMeses').map(Number).sort((a,b) => a-b);
-  const anio = Number(document.getElementById('anioInput').value);
-  if(!meses.length || !anio){ return; }
-  CURRENT_MESES = meses; CURRENT_ANIO = anio;
+  const periodos = getMsValues('filtroMeses').sort(); // "YYYY-MM": el orden alfabetico ya es cronologico
+  if(!periodos.length){ return; }
+  CURRENT_PERIODOS = periodos;
   document.getElementById('kpiArea').innerHTML = '<div class="loading">Cargando datos...</div>';
   try{
     const res = await fetch(API + `/api/kpis?${periodoQueryString()}${filtrosQueryString()}`, {headers: authHeaders()});
@@ -627,7 +643,7 @@ function renderCanalTable(tableId, data, fmtFn, unitLabel){
   const conMesAnterior = data.mes_anterior_num !== null && data.mes_anterior_num !== undefined;
   const cols = conMesAnterior ? 3 : 2;
   const labelActual = 'Actual';
-  const labelAnioAnt = formatPeriodoLabel(data.meses, data.anio - 1);
+  const labelAnioAnt = formatPeriodoLabel(periodosAnioAnterior(data.periodos));
   const labelMesAnt = conMesAnterior ? (NOMBRES_MES[data.mes_anterior_num] + ' ' + data.anio_mes_anterior) : '';
   const grupos = [...CATS, 'Total'];
 
@@ -672,7 +688,7 @@ function renderCanalTable(tableId, data, fmtFn, unitLabel){
 }
 
 async function loadCanalVolumen(){
-  if(!CURRENT_MESES.length || !CURRENT_ANIO) return;
+  if(!CURRENT_PERIODOS.length) return;
   const table = document.getElementById('canalVolumenTable');
   table.querySelector('tbody').innerHTML = '<tr><td style="padding:10px;">Cargando...</td></tr>';
   try{
@@ -686,7 +702,7 @@ async function loadCanalVolumen(){
 }
 
 async function loadCanalCompradores(){
-  if(!CURRENT_MESES.length || !CURRENT_ANIO) return;
+  if(!CURRENT_PERIODOS.length) return;
   const table = document.getElementById('canalCompradoresTable');
   table.querySelector('tbody').innerHTML = '<tr><td style="padding:10px;">Cargando...</td></tr>';
   try{
@@ -707,7 +723,7 @@ function renderMarcaCanalTable(tableId, data, fmtFn, unitLabel, categoria, tipo)
   const conMesAnterior = data.mes_anterior_num !== null && data.mes_anterior_num !== undefined;
   const cols = conMesAnterior ? 3 : 2;
   const labelActual = 'Actual';
-  const labelAnioAnt = formatPeriodoLabel(data.meses, data.anio - 1);
+  const labelAnioAnt = formatPeriodoLabel(periodosAnioAnterior(data.periodos));
   const labelMesAnt = conMesAnterior ? (NOMBRES_MES[data.mes_anterior_num] + ' ' + data.anio_mes_anterior) : '';
   const grupos = [...data.grupos, 'Total'];
 
@@ -758,7 +774,7 @@ function renderMarcaCanalTable(tableId, data, fmtFn, unitLabel, categoria, tipo)
 }
 
 async function loadMarcaCanalVolumen(){
-  if(!CURRENT_MESES.length || !CURRENT_ANIO) return;
+  if(!CURRENT_PERIODOS.length) return;
   const categoria = document.getElementById('catMarcaCanalVolSelect').value;
   const table = document.getElementById('marcaCanalVolTable');
   table.querySelector('tbody').innerHTML = '<tr><td style="padding:10px;">Cargando...</td></tr>';
@@ -773,7 +789,7 @@ async function loadMarcaCanalVolumen(){
 }
 
 async function loadMarcaCanalCompradores(){
-  if(!CURRENT_MESES.length || !CURRENT_ANIO) return;
+  if(!CURRENT_PERIODOS.length) return;
   const categoria = document.getElementById('catMarcaCanalCompSelect').value;
   const table = document.getElementById('marcaCanalCompTable');
   table.querySelector('tbody').innerHTML = '<tr><td style="padding:10px;">Cargando...</td></tr>';
@@ -804,7 +820,7 @@ function renderArticuloTable(tableId, data, fmtFn, unitLabel){
   const table = document.getElementById(tableId);
   const conMesAnterior = data.mes_anterior_num !== null && data.mes_anterior_num !== undefined;
   const labelActual = 'Actual';
-  const labelAnioAnt = formatPeriodoLabel(data.meses, data.anio - 1);
+  const labelAnioAnt = formatPeriodoLabel(periodosAnioAnterior(data.periodos));
   const labelMesAnt = conMesAnterior ? (NOMBRES_MES[data.mes_anterior_num] + ' ' + data.anio_mes_anterior) : '';
 
   let thead = `<tr><th style="padding:6px; text-align:left; border-bottom:1px solid var(--border);">Artículo</th>`;
@@ -873,7 +889,7 @@ function renderKpis(data){
     let badgeClass = 'neutral', badgeText = 'Sin dato año anterior';
     if(varPct !== null && varPct !== undefined){
       badgeClass = varPct >= 0 ? 'up' : 'down';
-      badgeText = (varPct >= 0 ? '+' : '') + varPct + '% vs ' + (data.anio-1);
+      badgeText = (varPct >= 0 ? '+' : '') + varPct + '% vs ' + formatPeriodoLabel(periodosAnioAnterior(data.periodos));
     }
     let filaMesAnterior = '';
     if(conMesAnterior){
@@ -892,10 +908,10 @@ function renderKpis(data){
       <div class="kpi-card">
         <h3>${catLabel(cat)}</h3>
         <div class="kpi-main">${fmtHL(k.actual)}</div>
-        <div class="kpi-sub">Acumulado ${formatPeriodoLabel(data.meses, data.anio)}</div>
+        <div class="kpi-sub">Acumulado ${formatPeriodoLabel(data.periodos)}</div>
         <div class="kpi-row"><span>Proyectado</span><span>${k.proyectado !== null ? fmtHL(k.proyectado) : 'Cargar dias configurados'}</span></div>
         ${filaMesAnterior}
-        <div class="kpi-row"><span>${formatPeriodoLabel(data.meses, data.anio-1)}</span><span>${fmtHL(k.anio_anterior)}</span></div>
+        <div class="kpi-row"><span>${formatPeriodoLabel(periodosAnioAnterior(data.periodos))}</span><span>${fmtHL(k.anio_anterior)}</span></div>
         <div class="kpi-row"><span>Variación vs año anterior</span><span class="badge ${badgeClass}">${badgeText}</span></div>
       </div>
     `;
@@ -925,10 +941,10 @@ function renderKpis(data){
   }
 }
 
-let CURRENT_MESES = [], CURRENT_ANIO = null, CURRENT_DRILLDOWN = [], DEFAULT_MES = null;
+let CURRENT_PERIODOS = [], CURRENT_DRILLDOWN = [], DEFAULT_PERIODO = null;
 
 async function loadRankingMarcas(){
-  if(!CURRENT_MESES.length || !CURRENT_ANIO) return;
+  if(!CURRENT_PERIODOS.length) return;
   const categoria = document.getElementById('catRankingSelect').value;
   const area = document.getElementById('rankingArea');
   area.innerHTML = '<div class="loading">Cargando ranking...</div>';
@@ -1052,13 +1068,13 @@ function renderMsPanel(id){
 // El filtro de meses ("filtroMeses") no puede quedar vacio (a diferencia de
 // Supervisor/Vendedor/Dia/Camionero, donde vacio significa "todos" y el
 // backend no exige el parametro): /api/kpis y el resto de los endpoints de
-// periodo necesitan al menos un mes. Si una accion deja la seleccion vacia,
-// se vuelve a marcar DEFAULT_MES (el mes actual segun el ultimo archivo
-// subido) en vez de dejarla en blanco.
+// periodo necesitan al menos un periodo. Si una accion deja la seleccion
+// vacia, se vuelve a marcar DEFAULT_PERIODO (el mes actual segun el ultimo
+// archivo subido) en vez de dejarla en blanco.
 function ensureMesesNoVacio(id){
   if(id !== 'filtroMeses') return;
-  if(MS_STATE[id].size === 0 && DEFAULT_MES){
-    MS_STATE[id].add(String(DEFAULT_MES));
+  if(MS_STATE[id].size === 0 && DEFAULT_PERIODO){
+    MS_STATE[id].add(DEFAULT_PERIODO);
     renderMsPanel(id);
   }
 }
@@ -1087,13 +1103,25 @@ function msClear(id){
   loadKpis();
 }
 
+// Cuando queda exactamente UNA opcion tildada y el filtro tiene labels (hoy
+// solo "filtroMeses"), el boton muestra directamente ese texto (ej
+// "Septiembre 2026") en vez de "(1)" - es mas claro que el numero. Con 0 o 2+
+// opciones se mantiene el formato de siempre.
 function updateMsButton(id){
   const wrap = document.getElementById('ms-' + id);
   const btn = wrap.querySelector('.ms-btn');
   const label = wrap.dataset.label;
-  const n = (MS_STATE[id] || new Set()).size;
-  if(n === 0){ btn.textContent = `${label} (todos)`; btn.classList.remove('activo'); }
-  else { btn.textContent = `${label} (${n})`; btn.classList.add('activo'); }
+  const state = MS_STATE[id] || new Set();
+  const n = state.size;
+  if(n === 0){ btn.textContent = `${label} (todos)`; btn.classList.remove('activo'); return; }
+  if(n === 1 && MS_LABELS[id]){
+    const v = [...state][0];
+    btn.textContent = MS_LABELS[id][v] || `${label} (1)`;
+    btn.classList.add('activo');
+    return;
+  }
+  btn.textContent = `${label} (${n})`;
+  btn.classList.add('activo');
 }
 
 function toggleMs(id){
@@ -1122,10 +1150,10 @@ function limpiarFiltros(){
 
 // A diferencia de limpiarFiltros() (que deja Supervisor/Vendedor/Dia/
 // Camionero en "todos"), limpiar el filtro de meses vuelve a dejar
-// seleccionado solo el mes actual (DEFAULT_MES) - ver comentario en
+// seleccionado solo el periodo actual (DEFAULT_PERIODO) - ver comentario en
 // ensureMesesNoVacio.
 function limpiarMeses(){
-  MS_STATE['filtroMeses'] = new Set(DEFAULT_MES ? [String(DEFAULT_MES)] : []);
+  MS_STATE['filtroMeses'] = new Set(DEFAULT_PERIODO ? [DEFAULT_PERIODO] : []);
   renderMsPanel('filtroMeses');
   updateMsButton('filtroMeses');
   loadKpis();
@@ -1141,21 +1169,28 @@ function filtrosQueryString(){
   return qs;
 }
 
-// Query string del periodo (meses seleccionados + anio) para todos los
-// endpoints que dependen del periodo compartido (Volumen y Compradores).
+// Query string del periodo (pares mes-año seleccionados, ej "2025-11|2026-01")
+// para todos los endpoints que dependen del periodo compartido (Volumen y
+// Compradores).
 function periodoQueryString(){
-  return `meses=${CURRENT_MESES.join('|')}&anio=${CURRENT_ANIO}`;
+  return `periodos=${CURRENT_PERIODOS.join('|')}`;
 }
 
-// Etiqueta legible de un conjunto de meses para un anio dado: un solo mes
-// muestra el nombre completo ("Septiembre 2026"), 2 o mas muestran un rango
-// abreviado del primero al ultimo mes seleccionado ("Ene-Sep 2026"), igual
-// al ejemplo que pidio el usuario.
+// Etiqueta legible de un conjunto de periodos (array de {mes, anio}, como
+// los devuelve el backend): un solo periodo muestra el nombre completo
+// ("Septiembre 2026"), 2 o mas muestran un rango abreviado del primero al
+// ultimo periodo seleccionado ("Nov 2025-Jun 2026"), permitiendo que el
+// rango cruce de un año a otro.
 const NOMBRES_MES_ABREV = ['','Ene','Feb','Mar','Abr','May','Jun','Jul','Ago','Sep','Oct','Nov','Dic'];
-function formatPeriodoLabel(meses, anio){
-  if(!meses || !meses.length) return '' + anio;
-  if(meses.length === 1) return NOMBRES_MES[meses[0]] + ' ' + anio;
-  return NOMBRES_MES_ABREV[meses[0]] + '-' + NOMBRES_MES_ABREV[meses[meses.length-1]] + ' ' + anio;
+function formatPeriodoLabel(periodos){
+  if(!periodos || !periodos.length) return '';
+  if(periodos.length === 1) return NOMBRES_MES[periodos[0].mes] + ' ' + periodos[0].anio;
+  const primero = periodos[0], ultimo = periodos[periodos.length-1];
+  return NOMBRES_MES_ABREV[primero.mes] + ' ' + primero.anio + '-' + NOMBRES_MES_ABREV[ultimo.mes] + ' ' + ultimo.anio;
+}
+// Mismos periodos, un año antes cada uno - para el rotulo de "año anterior".
+function periodosAnioAnterior(periodos){
+  return (periodos || []).map(p => ({ mes: p.mes, anio: p.anio - 1 }));
 }
 
 const CAT_MAP = {'CERVEZA':'Cervezas','AGUA':'Aguas','VINOS':'Vinos','SIDRAS':'Sidras'};
@@ -1332,7 +1367,7 @@ async function procesarVentasHoy(){
 }
 
 async function loadCompradores(){
-  if(!CURRENT_MESES.length || !CURRENT_ANIO) return;
+  if(!CURRENT_PERIODOS.length) return;
   const area = document.getElementById('compradoresArea');
   area.innerHTML = '<div class="loading">Cargando...</div>';
   try{
@@ -1359,7 +1394,7 @@ function renderKpisCompradores(data){
     let badgeClass = 'neutral', badgeText = 'Sin dato año anterior';
     if(varPct !== null && varPct !== undefined){
       badgeClass = varPct >= 0 ? 'up' : 'down';
-      badgeText = (varPct >= 0 ? '+' : '') + varPct + '% vs ' + (data.anio-1);
+      badgeText = (varPct >= 0 ? '+' : '') + varPct + '% vs ' + formatPeriodoLabel(periodosAnioAnterior(data.periodos));
     }
     let filaMesAnterior = '';
     if(conMesAnterior){
@@ -1378,10 +1413,10 @@ function renderKpisCompradores(data){
       <div class="kpi-card" style="cursor:pointer;" onclick="loadCompradoresDrill('${cat}')">
         <h3>${catLabel(cat)}</h3>
         <div class="kpi-main">${fmtInt(k.actual)}</div>
-        <div class="kpi-sub">Compradores ${formatPeriodoLabel(data.meses, data.anio)}</div>
+        <div class="kpi-sub">Compradores ${formatPeriodoLabel(data.periodos)}</div>
         <div class="kpi-row"><span>Proyectado</span><span>${k.proyectado !== null ? fmtInt(k.proyectado) : 'Cargar dias configurados'}</span></div>
         ${filaMesAnterior}
-        <div class="kpi-row"><span>${formatPeriodoLabel(data.meses, data.anio-1)}</span><span>${fmtInt(k.anio_anterior)}</span></div>
+        <div class="kpi-row"><span>${formatPeriodoLabel(periodosAnioAnterior(data.periodos))}</span><span>${fmtInt(k.anio_anterior)}</span></div>
         <div class="kpi-row"><span>Variación vs año anterior</span><span class="badge ${badgeClass}">${badgeText}</span></div>
       </div>
     `;
@@ -1423,7 +1458,7 @@ function volverCompradores(){
 
 let TOP_CLIENTES_CATEGORIA = [];
 async function loadTopClientesCategoria(){
-  if(!CURRENT_MESES.length || !CURRENT_ANIO) return;
+  if(!CURRENT_PERIODOS.length) return;
   const categoria = document.getElementById('catTopClientesSelect').value;
   const limit = document.getElementById('limitTopClientesSelect').value;
   const body = document.getElementById('topClientesBody');
