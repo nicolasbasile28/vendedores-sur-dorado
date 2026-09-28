@@ -593,6 +593,19 @@ const DATA_DIR = process.env.DB_PATH ? path.dirname(process.env.DB_PATH) : path.
 const TMP_DIR = path.join(DATA_DIR, 'tmp_uploads');
 try { fs.mkdirSync(TMP_DIR, { recursive: true }); } catch (e) {}
 
+// Al arrancar el servidor se borra cualquier archivo temporal de una subida
+// de excel que haya quedado a mitad de camino (ej: el servidor se reinicio
+// en medio de una subida, o una subida fallo antes de terminar) - uploadJobs
+// y uploadFilenames son Maps en memoria que se pierden en cada reinicio, asi
+// que cualquier archivo que quede en TMP_DIR ya es basura sin dueño. Si no se
+// limpia, se va acumulando (cada archivo de ventas pesa 15-25MB) hasta llenar
+// el disco - esto es lo que causaba el error "no space left on device".
+try {
+  for (const f of fs.readdirSync(TMP_DIR)) {
+    try { fs.unlinkSync(path.join(TMP_DIR, f)); } catch (e) {}
+  }
+} catch (e) {}
+
 function tmpPathFor(uploadId) {
   if (!/^[a-f0-9]{32}$/.test(uploadId)) return null;
   return path.join(TMP_DIR, uploadId + '.bin');
