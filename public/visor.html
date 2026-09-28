@@ -158,20 +158,11 @@
     <div id="periodoFiltrosWrap">
       <div class="periodo">
         <span>Periodo:</span>
-        <select id="mesInput">
-          <option value="1">Enero</option>
-          <option value="2">Febrero</option>
-          <option value="3">Marzo</option>
-          <option value="4">Abril</option>
-          <option value="5">Mayo</option>
-          <option value="6">Junio</option>
-          <option value="7">Julio</option>
-          <option value="8">Agosto</option>
-          <option value="9">Septiembre</option>
-          <option value="10">Octubre</option>
-          <option value="11">Noviembre</option>
-          <option value="12">Diciembre</option>
-        </select>
+        <div class="ms" id="ms-filtroMeses" data-label="Meses">
+          <button type="button" class="ms-btn" onclick="toggleMs('filtroMeses')">Meses (todos)</button>
+          <div class="ms-panel hidden"></div>
+        </div>
+        <button onclick="limpiarMeses()" style="background:transparent; border:1px solid var(--border); color:var(--text2);">Limpiar</button>
         <input id="anioInput" type="number" placeholder="Año" style="width:70px;">
         <button onclick="loadKpis()">Ver</button>
         <span id="periodoNote" style="font-size:12px;"></span>
@@ -271,6 +262,18 @@
           <tbody><tr><td style="padding:10px;">Elegí "Ver" arriba para cargar.</td></tr></tbody>
         </table>
       </div>
+      <p class="note">Hacé clic en una marca para ver el volumen por artículo.</p>
+    </div>
+
+    <div class="section" id="articuloVolDrillSection" style="display:none;">
+      <h2 id="articuloVolDrillTitle">Volumen por artículo</h2>
+      <button onclick="exportarMarcaCanalExcel('articuloVolDrillTable', 'volumen_por_articulo')" style="background:var(--bordo); color:#fff; border:none; padding:7px 14px; border-radius:6px; cursor:pointer; font-size:13px; margin-bottom:12px;">Exportar a Excel</button>
+      <div style="overflow-x:auto;">
+        <table style="width:100%; border-collapse:collapse; font-size:12px; white-space:nowrap;" id="articuloVolDrillTable">
+          <thead></thead>
+          <tbody></tbody>
+        </table>
+      </div>
     </div>
 
     </div>
@@ -359,6 +362,18 @@
         <table style="width:100%; border-collapse:collapse; font-size:12px; white-space:nowrap;" id="marcaCanalCompTable">
           <thead></thead>
           <tbody><tr><td style="padding:10px;">Elegí "Ver" arriba para cargar.</td></tr></tbody>
+        </table>
+      </div>
+      <p class="note">Hacé clic en una marca para ver los compradores por artículo.</p>
+    </div>
+
+    <div class="section" id="articuloCompDrillSection" style="display:none;">
+      <h2 id="articuloCompDrillTitle">Compradores por artículo</h2>
+      <button onclick="exportarMarcaCanalExcel('articuloCompDrillTable', 'compradores_por_articulo')" style="background:var(--bordo); color:#fff; border:none; padding:7px 14px; border-radius:6px; cursor:pointer; font-size:13px; margin-bottom:12px;">Exportar a Excel</button>
+      <div style="overflow-x:auto;">
+        <table style="width:100%; border-collapse:collapse; font-size:12px; white-space:nowrap;" id="articuloCompDrillTable">
+          <thead></thead>
+          <tbody></tbody>
         </table>
       </div>
     </div>
@@ -533,7 +548,18 @@ async function initPeriodoYKpis(){
     const meta = await res.json();
     const mesNum = Number(meta.mes_actual_num) || (new Date().getMonth()+1);
     const anioNum = Number(meta.anio_actual_num) || new Date().getFullYear();
-    document.getElementById('mesInput').value = mesNum;
+    DEFAULT_MES = mesNum;
+    const labelsMeses = {};
+    for(let m=1;m<=12;m++) labelsMeses[String(m)] = NOMBRES_MES[m];
+    fillMs('filtroMeses', Array.from({length:12}, (_,i) => String(i+1)), labelsMeses);
+    // Solo se preselecciona el mes actual si todavia no hay ninguno marcado
+    // (para no pisar la seleccion del usuario si initPeriodoYKpis se vuelve
+    // a llamar, ej. despues de subir el archivo de venta del dia).
+    if(!MS_STATE['filtroMeses'] || MS_STATE['filtroMeses'].size === 0){
+      MS_STATE['filtroMeses'] = new Set([String(mesNum)]);
+      renderMsPanel('filtroMeses');
+      updateMsButton('filtroMeses');
+    }
     document.getElementById('anioInput').value = anioNum;
     document.getElementById('periodoNote').textContent = meta.mes_actual ? ('Último dato cargado: ' + meta.mes_actual) : '';
     const ultimaActEl = document.getElementById('ultimaActualizacionVentas');
@@ -556,13 +582,13 @@ const ICONOS_CAT = { 'Cervezas':'🍺', 'Aguas':'💧', 'Vinos':'🍷', 'Sidras'
 function catLabel(cat){ return (ICONOS_CAT[cat] ? ICONOS_CAT[cat] + ' ' : '') + cat; }
 
 async function loadKpis(){
-  const mes = Number(document.getElementById('mesInput').value);
+  const meses = getMsValues('filtroMeses').map(Number).sort((a,b) => a-b);
   const anio = Number(document.getElementById('anioInput').value);
-  if(!mes || !anio){ return; }
-  CURRENT_MES = mes; CURRENT_ANIO = anio;
+  if(!meses.length || !anio){ return; }
+  CURRENT_MESES = meses; CURRENT_ANIO = anio;
   document.getElementById('kpiArea').innerHTML = '<div class="loading">Cargando datos...</div>';
   try{
-    const res = await fetch(API + `/api/kpis?mes=${mes}&anio=${anio}${filtrosQueryString()}`, {headers: authHeaders()});
+    const res = await fetch(API + `/api/kpis?${periodoQueryString()}${filtrosQueryString()}`, {headers: authHeaders()});
     const data = await res.json();
     if(!res.ok){ document.getElementById('kpiArea').innerHTML = '<div class="loading">' + (data.error||'Error') + '</div>'; return; }
     renderKpis(data);
@@ -598,20 +624,22 @@ function fmtInt(n){
 function renderCanalTable(tableId, data, fmtFn, unitLabel){
   const table = document.getElementById(tableId);
   const CATS = ['Cervezas','Aguas','Vinos','Sidras'];
+  const conMesAnterior = data.mes_anterior_num !== null && data.mes_anterior_num !== undefined;
+  const cols = conMesAnterior ? 3 : 2;
   const labelActual = 'Actual';
-  const labelAnioAnt = NOMBRES_MES[data.mes] + ' ' + (data.anio - 1);
-  const labelMesAnt = NOMBRES_MES[data.mes_anterior_num] + ' ' + data.anio_mes_anterior;
+  const labelAnioAnt = formatPeriodoLabel(data.meses, data.anio - 1);
+  const labelMesAnt = conMesAnterior ? (NOMBRES_MES[data.mes_anterior_num] + ' ' + data.anio_mes_anterior) : '';
   const grupos = [...CATS, 'Total'];
 
   let thead = '<tr><th style="padding:6px; text-align:left; border-bottom:1px solid var(--border);">Canal</th>';
   for(const g of grupos){
-    thead += `<th colspan="3" style="padding:6px; text-align:center; border-bottom:1px solid var(--border); border-left:1px solid var(--border); color:var(--dorado);">${catLabel(g)}${unitLabel ? ' ('+unitLabel+')' : ''}</th>`;
+    thead += `<th colspan="${cols}" style="padding:6px; text-align:center; border-bottom:1px solid var(--border); border-left:1px solid var(--border); color:var(--dorado);">${catLabel(g)}${unitLabel ? ' ('+unitLabel+')' : ''}</th>`;
   }
   thead += '</tr><tr><th style="padding:4px;"></th>';
   for(let i=0;i<grupos.length;i++){
     thead += `<th style="padding:4px; text-align:right; border-left:1px solid var(--border); color:var(--text2); font-weight:600;">${labelActual}</th>`;
     thead += `<th style="padding:4px; text-align:right; color:var(--text2); font-weight:600;">${labelAnioAnt}</th>`;
-    thead += `<th style="padding:4px; text-align:right; color:var(--text2); font-weight:600;">${labelMesAnt}</th>`;
+    if(conMesAnterior) thead += `<th style="padding:4px; text-align:right; color:var(--text2); font-weight:600;">${labelMesAnt}</th>`;
   }
   thead += '</tr>';
   table.querySelector('thead').innerHTML = thead;
@@ -623,19 +651,19 @@ function renderCanalTable(tableId, data, fmtFn, unitLabel){
       const c = filaData.categorias[cat] || {actual:0, anio_anterior:0, mes_anterior:0};
       html += `<td style="padding:6px; text-align:right; border-left:1px solid var(--border);">${fmtFn(c.actual)}</td>`;
       html += `<td style="padding:6px; text-align:right; color:var(--text2);">${fmtFn(c.anio_anterior)}</td>`;
-      html += `<td style="padding:6px; text-align:right; color:var(--text2);">${fmtFn(c.mes_anterior)}</td>`;
+      if(conMesAnterior) html += `<td style="padding:6px; text-align:right; color:var(--text2);">${fmtFn(c.mes_anterior)}</td>`;
     }
     const t = filaData.total;
     html += `<td style="padding:6px; text-align:right; border-left:1px solid var(--border); font-weight:700;">${fmtFn(t.actual)}</td>`;
     html += `<td style="padding:6px; text-align:right; color:var(--text2); font-weight:700;">${fmtFn(t.anio_anterior)}</td>`;
-    html += `<td style="padding:6px; text-align:right; color:var(--text2); font-weight:700;">${fmtFn(t.mes_anterior)}</td>`;
+    if(conMesAnterior) html += `<td style="padding:6px; text-align:right; color:var(--text2); font-weight:700;">${fmtFn(t.mes_anterior)}</td>`;
     html += '</tr>';
     return html;
   }
 
   let tbody = '';
   if(!data.filas.length){
-    tbody = `<tr><td colspan="${1 + grupos.length*3}" style="padding:10px;">Sin datos para este período.</td></tr>`;
+    tbody = `<tr><td colspan="${1 + grupos.length*cols}" style="padding:10px;">Sin datos para este período.</td></tr>`;
   } else {
     for(const f of data.filas) tbody += fila(f.canal, f, false);
     tbody += fila('Total general', data.total_general, true);
@@ -644,11 +672,11 @@ function renderCanalTable(tableId, data, fmtFn, unitLabel){
 }
 
 async function loadCanalVolumen(){
-  if(!CURRENT_MES || !CURRENT_ANIO) return;
+  if(!CURRENT_MESES.length || !CURRENT_ANIO) return;
   const table = document.getElementById('canalVolumenTable');
   table.querySelector('tbody').innerHTML = '<tr><td style="padding:10px;">Cargando...</td></tr>';
   try{
-    const res = await fetch(API + `/api/canal?mes=${CURRENT_MES}&anio=${CURRENT_ANIO}${filtrosQueryString()}`, {headers: authHeaders()});
+    const res = await fetch(API + `/api/canal?${periodoQueryString()}${filtrosQueryString()}`, {headers: authHeaders()});
     const data = await res.json();
     if(!res.ok){ table.querySelector('tbody').innerHTML = `<tr><td style="padding:10px;">${data.error||'Error'}</td></tr>`; return; }
     renderCanalTable('canalVolumenTable', data, fmtNum, 'HL');
@@ -658,11 +686,11 @@ async function loadCanalVolumen(){
 }
 
 async function loadCanalCompradores(){
-  if(!CURRENT_MES || !CURRENT_ANIO) return;
+  if(!CURRENT_MESES.length || !CURRENT_ANIO) return;
   const table = document.getElementById('canalCompradoresTable');
   table.querySelector('tbody').innerHTML = '<tr><td style="padding:10px;">Cargando...</td></tr>';
   try{
-    const res = await fetch(API + `/api/canal-compradores?mes=${CURRENT_MES}&anio=${CURRENT_ANIO}${filtrosQueryString()}`, {headers: authHeaders()});
+    const res = await fetch(API + `/api/canal-compradores?${periodoQueryString()}${filtrosQueryString()}`, {headers: authHeaders()});
     const data = await res.json();
     if(!res.ok){ table.querySelector('tbody').innerHTML = `<tr><td style="padding:10px;">${data.error||'Error'}</td></tr>`; return; }
     renderCanalTable('canalCompradoresTable', data, fmtInt, 'clientes');
@@ -674,46 +702,54 @@ async function loadCanalCompradores(){
 // Tabla compartida por "Volumen por marca y canal" y "Compradores por marca y
 // canal": filas = marcas (de UNA categoria elegida con el select), columnas =
 // los canales que hayan aparecido en los datos (dinamico, no hardcodeado).
-function renderMarcaCanalTable(tableId, data, fmtFn, unitLabel){
+function renderMarcaCanalTable(tableId, data, fmtFn, unitLabel, categoria, tipo){
   const table = document.getElementById(tableId);
+  const conMesAnterior = data.mes_anterior_num !== null && data.mes_anterior_num !== undefined;
+  const cols = conMesAnterior ? 3 : 2;
   const labelActual = 'Actual';
-  const labelAnioAnt = NOMBRES_MES[data.mes] + ' ' + (data.anio - 1);
-  const labelMesAnt = NOMBRES_MES[data.mes_anterior_num] + ' ' + data.anio_mes_anterior;
+  const labelAnioAnt = formatPeriodoLabel(data.meses, data.anio - 1);
+  const labelMesAnt = conMesAnterior ? (NOMBRES_MES[data.mes_anterior_num] + ' ' + data.anio_mes_anterior) : '';
   const grupos = [...data.grupos, 'Total'];
 
   let thead = '<tr><th style="padding:6px; text-align:left; border-bottom:1px solid var(--border);">Marca</th>';
   for(const g of grupos){
-    thead += `<th colspan="3" style="padding:6px; text-align:center; border-bottom:1px solid var(--border); border-left:1px solid var(--border); color:var(--dorado);">${g}${unitLabel ? ' ('+unitLabel+')' : ''}</th>`;
+    thead += `<th colspan="${cols}" style="padding:6px; text-align:center; border-bottom:1px solid var(--border); border-left:1px solid var(--border); color:var(--dorado);">${g}${unitLabel ? ' ('+unitLabel+')' : ''}</th>`;
   }
   thead += '</tr><tr><th style="padding:4px;"></th>';
   for(let i=0;i<grupos.length;i++){
     thead += `<th style="padding:4px; text-align:right; border-left:1px solid var(--border); color:var(--text2); font-weight:600;">${labelActual}</th>`;
     thead += `<th style="padding:4px; text-align:right; color:var(--text2); font-weight:600;">${labelAnioAnt}</th>`;
-    thead += `<th style="padding:4px; text-align:right; color:var(--text2); font-weight:600;">${labelMesAnt}</th>`;
+    if(conMesAnterior) thead += `<th style="padding:4px; text-align:right; color:var(--text2); font-weight:600;">${labelMesAnt}</th>`;
   }
   thead += '</tr>';
   table.querySelector('thead').innerHTML = thead;
 
+  // El nombre de la marca es cliqueable (salvo en la fila "Total general")
+  // para abrir el desglose por artículo de esa marca (loadMarcaArticuloDrill).
   function fila(nombre, filaData, negrita){
     const style = negrita ? 'font-weight:700; border-top:2px solid var(--border);' : 'border-top:1px solid var(--border);';
-    let html = `<tr style="${style}"><td style="padding:6px;">${nombre}</td>`;
+    const nombreEscapado = nombre.replace(/'/g,"\\'");
+    const nombreCell = negrita
+      ? `<td style="padding:6px;">${nombre}</td>`
+      : `<td style="padding:6px; cursor:pointer; text-decoration:underline dotted;" onclick="loadMarcaArticuloDrill('${categoria.replace(/'/g,"\\'")}', '${nombreEscapado}', '${tipo}')" title="Ver desglose por artículo">${nombre}</td>`;
+    let html = `<tr style="${style}">${nombreCell}`;
     for(const g of data.grupos){
       const c = filaData.porGrupo[g] || {actual:0, anio_anterior:0, mes_anterior:0};
       html += `<td style="padding:6px; text-align:right; border-left:1px solid var(--border);">${fmtFn(c.actual)}</td>`;
       html += `<td style="padding:6px; text-align:right; color:var(--text2);">${fmtFn(c.anio_anterior)}</td>`;
-      html += `<td style="padding:6px; text-align:right; color:var(--text2);">${fmtFn(c.mes_anterior)}</td>`;
+      if(conMesAnterior) html += `<td style="padding:6px; text-align:right; color:var(--text2);">${fmtFn(c.mes_anterior)}</td>`;
     }
     const t = filaData.total;
     html += `<td style="padding:6px; text-align:right; border-left:1px solid var(--border); font-weight:700;">${fmtFn(t.actual)}</td>`;
     html += `<td style="padding:6px; text-align:right; color:var(--text2); font-weight:700;">${fmtFn(t.anio_anterior)}</td>`;
-    html += `<td style="padding:6px; text-align:right; color:var(--text2); font-weight:700;">${fmtFn(t.mes_anterior)}</td>`;
+    if(conMesAnterior) html += `<td style="padding:6px; text-align:right; color:var(--text2); font-weight:700;">${fmtFn(t.mes_anterior)}</td>`;
     html += '</tr>';
     return html;
   }
 
   let tbody = '';
   if(!data.filas.length){
-    tbody = `<tr><td colspan="${1 + grupos.length*3}" style="padding:10px;">Sin datos para esta categoría en este período.</td></tr>`;
+    tbody = `<tr><td colspan="${1 + grupos.length*cols}" style="padding:10px;">Sin datos para esta categoría en este período.</td></tr>`;
   } else {
     for(const f of data.filas) tbody += fila(f.nombre, f, false);
     tbody += fila('Total general', data.total_general, true);
@@ -722,30 +758,30 @@ function renderMarcaCanalTable(tableId, data, fmtFn, unitLabel){
 }
 
 async function loadMarcaCanalVolumen(){
-  if(!CURRENT_MES || !CURRENT_ANIO) return;
+  if(!CURRENT_MESES.length || !CURRENT_ANIO) return;
   const categoria = document.getElementById('catMarcaCanalVolSelect').value;
   const table = document.getElementById('marcaCanalVolTable');
   table.querySelector('tbody').innerHTML = '<tr><td style="padding:10px;">Cargando...</td></tr>';
   try{
-    const res = await fetch(API + `/api/marca-canal?mes=${CURRENT_MES}&anio=${CURRENT_ANIO}&categoria=${encodeURIComponent(categoria)}${filtrosQueryString()}`, {headers: authHeaders()});
+    const res = await fetch(API + `/api/marca-canal?${periodoQueryString()}&categoria=${encodeURIComponent(categoria)}${filtrosQueryString()}`, {headers: authHeaders()});
     const data = await res.json();
     if(!res.ok){ table.querySelector('tbody').innerHTML = `<tr><td style="padding:10px;">${data.error||'Error'}</td></tr>`; return; }
-    renderMarcaCanalTable('marcaCanalVolTable', data, fmtNum, 'HL');
+    renderMarcaCanalTable('marcaCanalVolTable', data, fmtNum, 'HL', categoria, 'volumen');
   }catch(e){
     table.querySelector('tbody').innerHTML = `<tr><td style="padding:10px;">Error: ${e.message}</td></tr>`;
   }
 }
 
 async function loadMarcaCanalCompradores(){
-  if(!CURRENT_MES || !CURRENT_ANIO) return;
+  if(!CURRENT_MESES.length || !CURRENT_ANIO) return;
   const categoria = document.getElementById('catMarcaCanalCompSelect').value;
   const table = document.getElementById('marcaCanalCompTable');
   table.querySelector('tbody').innerHTML = '<tr><td style="padding:10px;">Cargando...</td></tr>';
   try{
-    const res = await fetch(API + `/api/marca-canal-compradores?mes=${CURRENT_MES}&anio=${CURRENT_ANIO}&categoria=${encodeURIComponent(categoria)}${filtrosQueryString()}`, {headers: authHeaders()});
+    const res = await fetch(API + `/api/marca-canal-compradores?${periodoQueryString()}&categoria=${encodeURIComponent(categoria)}${filtrosQueryString()}`, {headers: authHeaders()});
     const data = await res.json();
     if(!res.ok){ table.querySelector('tbody').innerHTML = `<tr><td style="padding:10px;">${data.error||'Error'}</td></tr>`; return; }
-    renderMarcaCanalTable('marcaCanalCompTable', data, fmtInt, 'clientes');
+    renderMarcaCanalTable('marcaCanalCompTable', data, fmtInt, 'clientes', categoria, 'compradores');
   }catch(e){
     table.querySelector('tbody').innerHTML = `<tr><td style="padding:10px;">Error: ${e.message}</td></tr>`;
   }
@@ -761,9 +797,75 @@ function exportarMarcaCanalExcel(tableId, nombreArchivo){
   XLSX.writeFile(wb, nombreArchivo + '.xlsx');
 }
 
+// Tabla del desglose de UNA marca por ARTICULO (drill-down desde "Volumen
+// por marca y canal" / "Compradores por marca y canal"). Filas = articulos,
+// una sola columna de grupo (Actual / año anterior / [mes anterior]).
+function renderArticuloTable(tableId, data, fmtFn, unitLabel){
+  const table = document.getElementById(tableId);
+  const conMesAnterior = data.mes_anterior_num !== null && data.mes_anterior_num !== undefined;
+  const labelActual = 'Actual';
+  const labelAnioAnt = formatPeriodoLabel(data.meses, data.anio - 1);
+  const labelMesAnt = conMesAnterior ? (NOMBRES_MES[data.mes_anterior_num] + ' ' + data.anio_mes_anterior) : '';
+
+  let thead = `<tr><th style="padding:6px; text-align:left; border-bottom:1px solid var(--border);">Artículo</th>`;
+  thead += `<th colspan="${conMesAnterior?3:2}" style="padding:6px; text-align:center; border-bottom:1px solid var(--border); border-left:1px solid var(--border); color:var(--dorado);">${unitLabel||''}</th></tr>`;
+  thead += '<tr><th style="padding:4px;"></th>';
+  thead += `<th style="padding:4px; text-align:right; border-left:1px solid var(--border); color:var(--text2); font-weight:600;">${labelActual}</th>`;
+  thead += `<th style="padding:4px; text-align:right; color:var(--text2); font-weight:600;">${labelAnioAnt}</th>`;
+  if(conMesAnterior) thead += `<th style="padding:4px; text-align:right; color:var(--text2); font-weight:600;">${labelMesAnt}</th>`;
+  thead += '</tr>';
+  table.querySelector('thead').innerHTML = thead;
+
+  function fila(nombre, f, negrita){
+    const style = negrita ? 'font-weight:700; border-top:2px solid var(--border);' : 'border-top:1px solid var(--border);';
+    let html = `<tr style="${style}"><td style="padding:6px;">${nombre}</td>`;
+    html += `<td style="padding:6px; text-align:right; border-left:1px solid var(--border);">${fmtFn(f.actual)}</td>`;
+    html += `<td style="padding:6px; text-align:right; color:var(--text2);">${fmtFn(f.anio_anterior)}</td>`;
+    if(conMesAnterior) html += `<td style="padding:6px; text-align:right; color:var(--text2);">${fmtFn(f.mes_anterior)}</td>`;
+    html += '</tr>';
+    return html;
+  }
+
+  let tbody = '';
+  if(!data.filas.length){
+    tbody = `<tr><td colspan="${conMesAnterior?4:3}" style="padding:10px;">Sin datos para esta marca en este período.</td></tr>`;
+  } else {
+    for(const f of data.filas) tbody += fila(f.nombre, f, false);
+    tbody += fila('Total marca', data.total_general, true);
+  }
+  table.querySelector('tbody').innerHTML = tbody;
+}
+
+// Abre el desglose por articulo de una marca puntual, tanto desde "Volumen
+// por marca y canal" (tipo='volumen') como desde "Compradores por marca y
+// canal" (tipo='compradores'). No oculta la seccion de origen (mismo patron
+// que drillDownSection de Ranking de marcas): solo aparece debajo.
+async function loadMarcaArticuloDrill(categoria, marca, tipo){
+  const esVol = tipo === 'volumen';
+  const sectionId = esVol ? 'articuloVolDrillSection' : 'articuloCompDrillSection';
+  const titleId = esVol ? 'articuloVolDrillTitle' : 'articuloCompDrillTitle';
+  const tableId = esVol ? 'articuloVolDrillTable' : 'articuloCompDrillTable';
+  const endpoint = esVol ? 'marca-articulo' : 'marca-articulo-compradores';
+  const section = document.getElementById(sectionId);
+  document.getElementById(titleId).textContent = `${esVol ? 'Volumen' : 'Compradores'} por artículo - ${marca} (${categoria})`;
+  section.style.display = 'block';
+  const table = document.getElementById(tableId);
+  table.querySelector('tbody').innerHTML = '<tr><td style="padding:10px;">Cargando...</td></tr>';
+  try{
+    const res = await fetch(API + `/api/${endpoint}?${periodoQueryString()}&categoria=${encodeURIComponent(categoria)}&marca=${encodeURIComponent(marca)}${filtrosQueryString()}`, {headers: authHeaders()});
+    const data = await res.json();
+    if(!res.ok){ table.querySelector('tbody').innerHTML = `<tr><td style="padding:10px;">${data.error||'Error'}</td></tr>`; return; }
+    renderArticuloTable(tableId, data, esVol ? fmtNum : fmtInt, esVol ? 'HL' : 'clientes');
+    section.scrollIntoView({behavior:'smooth', block:'nearest'});
+  }catch(e){
+    table.querySelector('tbody').innerHTML = `<tr><td style="padding:10px;">Error: ${e.message}</td></tr>`;
+  }
+}
+
 function renderKpis(data){
   const area = document.getElementById('kpiArea');
   const cats = ['Cervezas','Aguas','Vinos','Sidras'];
+  const conMesAnterior = data.mes_anterior_num !== null && data.mes_anterior_num !== undefined;
   let html = '<div class="kpi-grid">';
   for(const cat of cats){
     const k = data.categorias[cat] || {};
@@ -773,21 +875,27 @@ function renderKpis(data){
       badgeClass = varPct >= 0 ? 'up' : 'down';
       badgeText = (varPct >= 0 ? '+' : '') + varPct + '% vs ' + (data.anio-1);
     }
-    const varMesPct = k.variacion_mes_pct;
-    let badgeClassMes = 'neutral', badgeTextMes = 'Sin dato mes anterior';
-    if(varMesPct !== null && varMesPct !== undefined){
-      badgeClassMes = varMesPct >= 0 ? 'up' : 'down';
-      badgeTextMes = (varMesPct >= 0 ? '+' : '') + varMesPct + '% vs mes anterior';
+    let filaMesAnterior = '';
+    if(conMesAnterior){
+      const varMesPct = k.variacion_mes_pct;
+      let badgeClassMes = 'neutral', badgeTextMes = 'Sin dato mes anterior';
+      if(varMesPct !== null && varMesPct !== undefined){
+        badgeClassMes = varMesPct >= 0 ? 'up' : 'down';
+        badgeTextMes = (varMesPct >= 0 ? '+' : '') + varMesPct + '% vs mes anterior';
+      }
+      filaMesAnterior = `
+        <div class="kpi-row"><span>${NOMBRES_MES[data.mes_anterior_num]} ${data.anio_mes_anterior}</span><span>${fmtHL(k.mes_anterior)}</span></div>
+        <div class="kpi-row"><span>Variación vs mes anterior</span><span class="badge ${badgeClassMes}">${badgeTextMes}</span></div>
+      `;
     }
     html += `
       <div class="kpi-card">
         <h3>${catLabel(cat)}</h3>
         <div class="kpi-main">${fmtHL(k.actual)}</div>
-        <div class="kpi-sub">Acumulado ${NOMBRES_MES[data.mes]} ${data.anio}</div>
+        <div class="kpi-sub">Acumulado ${formatPeriodoLabel(data.meses, data.anio)}</div>
         <div class="kpi-row"><span>Proyectado</span><span>${k.proyectado !== null ? fmtHL(k.proyectado) : 'Cargar dias configurados'}</span></div>
-        <div class="kpi-row"><span>${NOMBRES_MES[data.mes_anterior_num]} ${data.anio_mes_anterior}</span><span>${fmtHL(k.mes_anterior)}</span></div>
-        <div class="kpi-row"><span>Variación vs mes anterior</span><span class="badge ${badgeClassMes}">${badgeTextMes}</span></div>
-        <div class="kpi-row"><span>${NOMBRES_MES[data.mes]} ${data.anio-1}</span><span>${fmtHL(k.anio_anterior)}</span></div>
+        ${filaMesAnterior}
+        <div class="kpi-row"><span>${formatPeriodoLabel(data.meses, data.anio-1)}</span><span>${fmtHL(k.anio_anterior)}</span></div>
         <div class="kpi-row"><span>Variación vs año anterior</span><span class="badge ${badgeClass}">${badgeText}</span></div>
       </div>
     `;
@@ -817,16 +925,16 @@ function renderKpis(data){
   }
 }
 
-let CURRENT_MES = null, CURRENT_ANIO = null, CURRENT_DRILLDOWN = [];
+let CURRENT_MESES = [], CURRENT_ANIO = null, CURRENT_DRILLDOWN = [], DEFAULT_MES = null;
 
 async function loadRankingMarcas(){
-  if(!CURRENT_MES || !CURRENT_ANIO) return;
+  if(!CURRENT_MESES.length || !CURRENT_ANIO) return;
   const categoria = document.getElementById('catRankingSelect').value;
   const area = document.getElementById('rankingArea');
   area.innerHTML = '<div class="loading">Cargando ranking...</div>';
   document.getElementById('drillDownSection').style.display = 'none';
   try{
-    const res = await fetch(API + `/api/ranking/marcas?mes=${CURRENT_MES}&anio=${CURRENT_ANIO}&categoria=${encodeURIComponent(categoria)}${filtrosQueryString()}`, {headers: authHeaders()});
+    const res = await fetch(API + `/api/ranking/marcas?${periodoQueryString()}&categoria=${encodeURIComponent(categoria)}${filtrosQueryString()}`, {headers: authHeaders()});
     const rows = await res.json();
     if(!res.ok){ area.innerHTML = '<div class="loading">' + (rows.error||'Error') + '</div>'; return; }
     if(!rows.length){ area.innerHTML = '<div class="loading">Sin datos para esta categoría en este período.</div>'; return; }
@@ -859,7 +967,7 @@ async function loadDrillDown(categoria, marca){
   section.style.display = 'block';
   body.innerHTML = '<tr><td colspan="4" style="padding:10px;">Cargando...</td></tr>';
   try{
-    const res = await fetch(API + `/api/ranking/clientes?mes=${CURRENT_MES}&anio=${CURRENT_ANIO}&categoria=${encodeURIComponent(categoria)}&marca=${encodeURIComponent(marca)}${filtrosQueryString()}`, {headers: authHeaders()});
+    const res = await fetch(API + `/api/ranking/clientes?${periodoQueryString()}&categoria=${encodeURIComponent(categoria)}&marca=${encodeURIComponent(marca)}${filtrosQueryString()}`, {headers: authHeaders()});
     const rows = await res.json();
     if(!res.ok){ body.innerHTML = '<tr><td colspan="4">' + (rows.error||'Error') + '</td></tr>'; return; }
     CURRENT_DRILLDOWN = rows;
@@ -904,11 +1012,16 @@ async function loadFiltrosOpciones(){
 // desplegable). MS_STATE guarda, por id de filtro, el Set de valores
 // tildados; MS_VALUES guarda la lista completa de opciones disponibles
 // (para poder reconstruir el panel sin perder la seleccion al recargar).
+// MS_LABELS es opcional: id -> {valor: texto a mostrar}, para filtros donde
+// el valor interno (ej "1"..."12" para meses) no es igual al texto que ve
+// el usuario (ej "Enero"..."Diciembre").
 const MS_STATE = {};
 const MS_VALUES = {};
+const MS_LABELS = {};
 
-function fillMs(id, values){
+function fillMs(id, values, labels){
   MS_VALUES[id] = values || [];
+  if(labels) MS_LABELS[id] = labels;
   if(!MS_STATE[id]) MS_STATE[id] = new Set();
   // saca de la seleccion valores que ya no existen mas en la lista
   MS_STATE[id] = new Set([...MS_STATE[id]].filter(v => values.includes(v)));
@@ -921,6 +1034,7 @@ function renderMsPanel(id){
   const panel = wrap.querySelector('.ms-panel');
   const values = MS_VALUES[id] || [];
   const selected = MS_STATE[id] || new Set();
+  const labels = MS_LABELS[id] || {};
   if(!values.length){
     panel.innerHTML = '<div class="ms-empty">Sin opciones disponibles.</div>';
     return;
@@ -929,16 +1043,31 @@ function renderMsPanel(id){
   for(const v of values){
     const checked = selected.has(v) ? 'checked' : '';
     const vAttr = v.replace(/"/g,'&quot;');
-    html += `<label class="ms-option"><input type="checkbox" value="${vAttr}" ${checked} onchange="onMsCheck('${id}', this)"> ${v}</label>`;
+    html += `<label class="ms-option"><input type="checkbox" value="${vAttr}" ${checked} onchange="onMsCheck('${id}', this)"> ${labels[v] || v}</label>`;
   }
   html += `<div class="ms-actions"><a onclick="msSelectAll('${id}')">Todos</a><a onclick="msClear('${id}')">Ninguno</a></div>`;
   panel.innerHTML = html;
+}
+
+// El filtro de meses ("filtroMeses") no puede quedar vacio (a diferencia de
+// Supervisor/Vendedor/Dia/Camionero, donde vacio significa "todos" y el
+// backend no exige el parametro): /api/kpis y el resto de los endpoints de
+// periodo necesitan al menos un mes. Si una accion deja la seleccion vacia,
+// se vuelve a marcar DEFAULT_MES (el mes actual segun el ultimo archivo
+// subido) en vez de dejarla en blanco.
+function ensureMesesNoVacio(id){
+  if(id !== 'filtroMeses') return;
+  if(MS_STATE[id].size === 0 && DEFAULT_MES){
+    MS_STATE[id].add(String(DEFAULT_MES));
+    renderMsPanel(id);
+  }
 }
 
 function onMsCheck(id, input){
   if(!MS_STATE[id]) MS_STATE[id] = new Set();
   if(input.checked) MS_STATE[id].add(input.value);
   else MS_STATE[id].delete(input.value);
+  ensureMesesNoVacio(id);
   updateMsButton(id);
   loadKpis();
 }
@@ -952,6 +1081,7 @@ function msSelectAll(id){
 
 function msClear(id){
   MS_STATE[id] = new Set();
+  ensureMesesNoVacio(id);
   renderMsPanel(id);
   updateMsButton(id);
   loadKpis();
@@ -990,6 +1120,17 @@ function limpiarFiltros(){
   loadKpis();
 }
 
+// A diferencia de limpiarFiltros() (que deja Supervisor/Vendedor/Dia/
+// Camionero en "todos"), limpiar el filtro de meses vuelve a dejar
+// seleccionado solo el mes actual (DEFAULT_MES) - ver comentario en
+// ensureMesesNoVacio.
+function limpiarMeses(){
+  MS_STATE['filtroMeses'] = new Set(DEFAULT_MES ? [String(DEFAULT_MES)] : []);
+  renderMsPanel('filtroMeses');
+  updateMsButton('filtroMeses');
+  loadKpis();
+}
+
 function filtrosQueryString(){
   let qs = '';
   const map = { filtroSupervisor:'supervisor', filtroVendedor:'vendedor', filtroDia:'dia', filtroCamionero:'camionero' };
@@ -998,6 +1139,23 @@ function filtrosQueryString(){
     if(vals.length) qs += '&' + map[id] + '=' + encodeURIComponent(vals.join('|'));
   }
   return qs;
+}
+
+// Query string del periodo (meses seleccionados + anio) para todos los
+// endpoints que dependen del periodo compartido (Volumen y Compradores).
+function periodoQueryString(){
+  return `meses=${CURRENT_MESES.join('|')}&anio=${CURRENT_ANIO}`;
+}
+
+// Etiqueta legible de un conjunto de meses para un anio dado: un solo mes
+// muestra el nombre completo ("Septiembre 2026"), 2 o mas muestran un rango
+// abreviado del primero al ultimo mes seleccionado ("Ene-Sep 2026"), igual
+// al ejemplo que pidio el usuario.
+const NOMBRES_MES_ABREV = ['','Ene','Feb','Mar','Abr','May','Jun','Jul','Ago','Sep','Oct','Nov','Dic'];
+function formatPeriodoLabel(meses, anio){
+  if(!meses || !meses.length) return '' + anio;
+  if(meses.length === 1) return NOMBRES_MES[meses[0]] + ' ' + anio;
+  return NOMBRES_MES_ABREV[meses[0]] + '-' + NOMBRES_MES_ABREV[meses[meses.length-1]] + ' ' + anio;
 }
 
 const CAT_MAP = {'CERVEZA':'Cervezas','AGUA':'Aguas','VINOS':'Vinos','SIDRAS':'Sidras'};
@@ -1174,11 +1332,11 @@ async function procesarVentasHoy(){
 }
 
 async function loadCompradores(){
-  if(!CURRENT_MES || !CURRENT_ANIO) return;
+  if(!CURRENT_MESES.length || !CURRENT_ANIO) return;
   const area = document.getElementById('compradoresArea');
   area.innerHTML = '<div class="loading">Cargando...</div>';
   try{
-    const res = await fetch(API + `/api/kpis-compradores?mes=${CURRENT_MES}&anio=${CURRENT_ANIO}${filtrosQueryString()}`, {headers: authHeaders()});
+    const res = await fetch(API + `/api/kpis-compradores?${periodoQueryString()}${filtrosQueryString()}`, {headers: authHeaders()});
     const data = await res.json();
     if(!res.ok){ area.innerHTML = '<div class="loading">' + (data.error||'Error') + '</div>'; return; }
     renderKpisCompradores(data);
@@ -1193,6 +1351,7 @@ async function loadCompradores(){
 function renderKpisCompradores(data){
   const area = document.getElementById('compradoresArea');
   const cats = ['Cervezas','Aguas','Vinos','Sidras'];
+  const conMesAnterior = data.mes_anterior_num !== null && data.mes_anterior_num !== undefined;
   let html = '<div class="kpi-grid">';
   for(const cat of cats){
     const k = data.categorias[cat] || {};
@@ -1202,21 +1361,27 @@ function renderKpisCompradores(data){
       badgeClass = varPct >= 0 ? 'up' : 'down';
       badgeText = (varPct >= 0 ? '+' : '') + varPct + '% vs ' + (data.anio-1);
     }
-    const varMesPct = k.variacion_mes_pct;
-    let badgeClassMes = 'neutral', badgeTextMes = 'Sin dato mes anterior';
-    if(varMesPct !== null && varMesPct !== undefined){
-      badgeClassMes = varMesPct >= 0 ? 'up' : 'down';
-      badgeTextMes = (varMesPct >= 0 ? '+' : '') + varMesPct + '% vs mes anterior';
+    let filaMesAnterior = '';
+    if(conMesAnterior){
+      const varMesPct = k.variacion_mes_pct;
+      let badgeClassMes = 'neutral', badgeTextMes = 'Sin dato mes anterior';
+      if(varMesPct !== null && varMesPct !== undefined){
+        badgeClassMes = varMesPct >= 0 ? 'up' : 'down';
+        badgeTextMes = (varMesPct >= 0 ? '+' : '') + varMesPct + '% vs mes anterior';
+      }
+      filaMesAnterior = `
+        <div class="kpi-row"><span>${NOMBRES_MES[data.mes_anterior_num]} ${data.anio_mes_anterior}</span><span>${fmtInt(k.mes_anterior)}</span></div>
+        <div class="kpi-row"><span>Variación vs mes anterior</span><span class="badge ${badgeClassMes}">${badgeTextMes}</span></div>
+      `;
     }
     html += `
       <div class="kpi-card" style="cursor:pointer;" onclick="loadCompradoresDrill('${cat}')">
         <h3>${catLabel(cat)}</h3>
         <div class="kpi-main">${fmtInt(k.actual)}</div>
-        <div class="kpi-sub">Compradores ${NOMBRES_MES[data.mes]} ${data.anio}</div>
+        <div class="kpi-sub">Compradores ${formatPeriodoLabel(data.meses, data.anio)}</div>
         <div class="kpi-row"><span>Proyectado</span><span>${k.proyectado !== null ? fmtInt(k.proyectado) : 'Cargar dias configurados'}</span></div>
-        <div class="kpi-row"><span>${NOMBRES_MES[data.mes_anterior_num]} ${data.anio_mes_anterior}</span><span>${fmtInt(k.mes_anterior)}</span></div>
-        <div class="kpi-row"><span>Variación vs mes anterior</span><span class="badge ${badgeClassMes}">${badgeTextMes}</span></div>
-        <div class="kpi-row"><span>${NOMBRES_MES[data.mes]} ${data.anio-1}</span><span>${fmtInt(k.anio_anterior)}</span></div>
+        ${filaMesAnterior}
+        <div class="kpi-row"><span>${formatPeriodoLabel(data.meses, data.anio-1)}</span><span>${fmtInt(k.anio_anterior)}</span></div>
         <div class="kpi-row"><span>Variación vs año anterior</span><span class="badge ${badgeClass}">${badgeText}</span></div>
       </div>
     `;
@@ -1234,7 +1399,7 @@ async function loadCompradoresDrill(categoria){
   section.classList.remove('hidden');
   body.innerHTML = '<tr><td colspan="4" style="padding:10px;">Cargando...</td></tr>';
   try{
-    const res = await fetch(API + `/api/ranking/clientes-categoria?mes=${CURRENT_MES}&anio=${CURRENT_ANIO}&categoria=${encodeURIComponent(categoria)}&limit=500${filtrosQueryString()}`, {headers: authHeaders()});
+    const res = await fetch(API + `/api/ranking/clientes-categoria?${periodoQueryString()}&categoria=${encodeURIComponent(categoria)}&limit=500${filtrosQueryString()}`, {headers: authHeaders()});
     const rows = await res.json();
     if(!res.ok){ body.innerHTML = '<tr><td colspan="4">' + (rows.error||'Error') + '</td></tr>'; return; }
     if(!rows.length){ body.innerHTML = '<tr><td colspan="4" style="padding:10px;">Sin compradores de esta categoría en este período.</td></tr>'; return; }
@@ -1258,13 +1423,13 @@ function volverCompradores(){
 
 let TOP_CLIENTES_CATEGORIA = [];
 async function loadTopClientesCategoria(){
-  if(!CURRENT_MES || !CURRENT_ANIO) return;
+  if(!CURRENT_MESES.length || !CURRENT_ANIO) return;
   const categoria = document.getElementById('catTopClientesSelect').value;
   const limit = document.getElementById('limitTopClientesSelect').value;
   const body = document.getElementById('topClientesBody');
   body.innerHTML = '<tr><td colspan="4" style="padding:10px;">Cargando...</td></tr>';
   try{
-    const res = await fetch(API + `/api/ranking/clientes-categoria?mes=${CURRENT_MES}&anio=${CURRENT_ANIO}&categoria=${encodeURIComponent(categoria)}&limit=${limit}${filtrosQueryString()}`, {headers: authHeaders()});
+    const res = await fetch(API + `/api/ranking/clientes-categoria?${periodoQueryString()}&categoria=${encodeURIComponent(categoria)}&limit=${limit}${filtrosQueryString()}`, {headers: authHeaders()});
     const rows = await res.json();
     if(!res.ok){ body.innerHTML = '<tr><td colspan="4">' + (rows.error||'Error') + '</td></tr>'; return; }
     TOP_CLIENTES_CATEGORIA = rows;
