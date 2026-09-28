@@ -705,27 +705,54 @@ function buildFiltros(query) {
   return { clause, params, join };
 }
 
-// Selector de periodo: uno o mas meses del MISMO anio (multi-select en el
-// frontend, igual que los filtros de supervisor/vendedor/etc, separados por
-// "|" con el parametro "meses"). El "anio" sigue siendo un solo valor. Se
-// acepta tambien el viejo parametro singular "mes" como fallback por
-// compatibilidad. Con un solo mes seleccionado el comportamiento es
-// identico al de antes (se compara contra el mismo mes del anio anterior y
-// contra el mes calendario anterior). Con 2 o mas meses seleccionados se
-// compara el conjunto elegido contra el MISMO conjunto de meses pero del
-// anio anterior, y no hay "mes anterior" (un rango de varios meses no tiene
-// un unico mes calendario anterior) - se deja null y el frontend oculta esa
-// columna.
-function parsePeriodo(query) {
-  const anio = Number(query.anio);
-  let meses = parseMulti(query.meses).map(Number).filter(Boolean);
-  if (!meses.length && query.mes) meses = [Number(query.mes)];
-  meses = Array.from(new Set(meses)).filter((m) => m >= 1 && m <= 12).sort((a, b) => a - b);
-  return { meses, anio };
+// Selector de periodo: uno o mas pares (mes, anio) elegidos libremente por
+// el usuario (multi-select en el frontend, valores "YYYY-MM" separados por
+// "|" con el parametro "periodos") - a diferencia del esquema anterior
+// (varios meses pero todos del MISMO anio), esto permite elegir un rango
+// que cruce el fin de año (ej. Noviembre 2025 a Junio 2026). Cada par se
+// codifica como el entero anio*100+mes para poder armar un IN (...) simple
+// en SQL. Se acepta tambien el formato viejo "meses"+"anio" (un solo anio)
+// y el mas viejo "mes" singular, como fallback de compatibilidad. Con un
+// solo periodo seleccionado el comportamiento es identico al de siempre (se
+// compara contra el mismo mes del anio anterior y contra el mes calendario
+// anterior). Con 2 o mas periodos seleccionados se compara cada mes elegido
+// contra el MISMO mes pero un anio antes, y no hay "mes anterior" (un rango
+// de varios meses no tiene un unico mes calendario anterior) - se deja null
+// y el frontend oculta esa columna.
+function parsePeriodos(query) {
+  let periodos = parseMulti(query.periodos)
+    .map((s) => {
+      const [a, m] = s.split('-').map(Number);
+      return { anio: a, mes: m };
+    })
+    .filter((p) => p.anio && p.mes >= 1 && p.mes <= 12);
+  if (!periodos.length) {
+    const anio = Number(query.anio);
+    let meses = parseMulti(query.meses).map(Number).filter(Boolean);
+    if (!meses.length && query.mes) meses = [Number(query.mes)];
+    meses = Array.from(new Set(meses)).filter((m) => m >= 1 && m <= 12);
+    if (anio && meses.length) periodos = meses.map((mes) => ({ anio, mes }));
+  }
+  const vistos = new Set();
+  periodos = periodos.filter((p) => {
+    const k = p.anio * 100 + p.mes;
+    if (vistos.has(k)) return false;
+    vistos.add(k);
+    return true;
+  });
+  periodos.sort((a, b) => (a.anio * 100 + a.mes) - (b.anio * 100 + b.mes));
+  return periodos;
 }
-function mesesClause(alias, meses) {
+function periodosClause(alias, periodos) {
   const col = alias ? alias + '.' : '';
-  return { clause: ` AND ${col}mes IN (${meses.map(() => '?').join(',')})`, params: [...meses] };
+  return {
+    clause: ` AND (${col}anio*100 + ${col}mes) IN (${periodos.map(() => '?').join(',')})`,
+    params: periodos.map((p) => p.anio * 100 + p.mes),
+  };
+}
+// Mismos meses, un anio antes cada uno (para la comparacion "año anterior").
+function periodosAnioAnterior(periodos) {
+  return periodos.map((p) => ({ anio: p.anio - 1, mes: p.mes }));
 }
 
 route('GET', '/api/filtros/opciones', async (req, res) => {
@@ -737,14 +764,28 @@ route('GET', '/api/filtros/opciones', async (req, res) => {
   sendJson(res, 200, { supervisores, camioneros, vendedores, dias });
 });
 
+// Lista de pares (mes, anio) que realmente tienen datos cargados - usado por
+// el frontend para armar el selector de periodo (solo se puede elegir un
+// periodo que exista, no hace falta un selector de año separado).
+route('GET', '/api/periodos-disponibles', async (req, res) => {
+  if (!requireAuth(req, res, ['admin', 'supervisor', 'vendedor'])) return;
+  const rows = db.prepare(`
+    SELECT DISTINCT anio, mes FROM ventas
+    WHERE anio IS NOT NULL AND mes IS NOT NULL
+    ORDER BY anio, mes
+  `).all();
+  sendJson(res, 200, rows.map(r => ({ anio: r.anio, mes: r.mes })));
+});
+
 route('GET', '/api/kpis', async (req, res) => {
   if (!requireAuth(req, res, ['admin', 'supervisor', 'vendedor'])) return;
   const parsed = url.parse(req.url, true);
-  const { meses, anio } = parsePeriodo(parsed.query);
-  if (!meses.length || !anio) return sendJson(res, 400, { error: 'Faltan parametros mes(es) y anio' });
+  const periodos = parsePeriodos(parsed.query);
+  if (!periodos.length) return sendJson(res, 400, { error: 'Faltan parametros de periodo' });
   const { clause, params, join } = buildFiltros(parsed.query);
-  const { clause: mClause, params: mParams } = mesesClause('v', meses);
-  const soloUnMes = meses.length === 1;
+  const { clause: pClause, params: pParams } = periodosClause('v', periodos);
+  const { clause: paClause, params: paParams } = periodosClause('v', periodosAnioAnterior(periodos));
+  const soloUnMes = periodos.length === 1;
 
   const diasConfigRow = db.prepare('SELECT value FROM meta WHERE key = ?').get('dias_configurados');
   const diasConfigurados = diasConfigRow ? Number(diasConfigRow.value) : null;
@@ -753,18 +794,18 @@ route('GET', '/api/kpis', async (req, res) => {
   // queda null (y el proyectado tambien) salvo que se haya elegido un solo mes.
   let diasReales = null;
   if (soloUnMes) {
-    const diasRealesRow = db.prepare('SELECT value FROM meta WHERE key = ?').get(`dias_reales_${anio}_${String(meses[0]).padStart(2, '0')}`);
+    const diasRealesRow = db.prepare('SELECT value FROM meta WHERE key = ?').get(`dias_reales_${periodos[0].anio}_${String(periodos[0].mes).padStart(2, '0')}`);
     diasReales = diasRealesRow ? Number(diasRealesRow.value) : null;
   }
 
   let mesAnteriorNum = null, anioMesAnterior = null;
-  if (soloUnMes) ({ mesAnteriorNum, anioMesAnterior } = periodoMesAnterior(meses[0], anio));
+  if (soloUnMes) ({ mesAnteriorNum, anioMesAnterior } = periodoMesAnterior(periodos[0].mes, periodos[0].anio));
 
   const CATS = ['Cervezas', 'Aguas', 'Vinos', 'Sidras'];
   const resultado = {};
   for (const cat of CATS) {
-    const actualRow = db.prepare(`SELECT SUM(v.um_hl) as total FROM ventas v ${join} WHERE v.categoria = ? AND v.anio = ?${mClause}${clause}`).get(cat, anio, ...mParams, ...params);
-    const anteriorRow = db.prepare(`SELECT SUM(v.um_hl) as total FROM ventas v ${join} WHERE v.categoria = ? AND v.anio = ?${mClause}${clause}`).get(cat, anio - 1, ...mParams, ...params);
+    const actualRow = db.prepare(`SELECT SUM(v.um_hl) as total FROM ventas v ${join} WHERE v.categoria = ?${pClause}${clause}`).get(cat, ...pParams, ...params);
+    const anteriorRow = db.prepare(`SELECT SUM(v.um_hl) as total FROM ventas v ${join} WHERE v.categoria = ?${paClause}${clause}`).get(cat, ...paParams, ...params);
     const actual = actualRow.total || 0;
     const anterior = anteriorRow.total || 0;
     let mesAnterior = null, variacionMesPct = null;
@@ -785,7 +826,7 @@ route('GET', '/api/kpis', async (req, res) => {
     };
   }
   sendJson(res, 200, {
-    meses, anio,
+    periodos,
     mes_anterior_num: mesAnteriorNum,
     anio_mes_anterior: anioMesAnterior,
     dias_configurados: diasConfigurados,
@@ -800,45 +841,45 @@ route('GET', '/api/kpis', async (req, res) => {
 route('GET', '/api/kpis-compradores', async (req, res) => {
   if (!requireAuth(req, res, ['admin', 'supervisor', 'vendedor'])) return;
   const parsed = url.parse(req.url, true);
-  const { meses, anio } = parsePeriodo(parsed.query);
-  if (!meses.length || !anio) return sendJson(res, 400, { error: 'Faltan parametros mes(es) y anio' });
+  const periodos = parsePeriodos(parsed.query);
+  if (!periodos.length) return sendJson(res, 400, { error: 'Faltan parametros de periodo' });
   const { clause, params, join } = buildFiltros(parsed.query);
-  const soloUnMes = meses.length === 1;
+  const soloUnMes = periodos.length === 1;
 
   const diasConfigRow = db.prepare('SELECT value FROM meta WHERE key = ?').get('dias_configurados');
   const diasConfigurados = diasConfigRow ? Number(diasConfigRow.value) : null;
   let diasReales = null;
   if (soloUnMes) {
-    const diasRealesRow = db.prepare('SELECT value FROM meta WHERE key = ?').get(`dias_reales_${anio}_${String(meses[0]).padStart(2, '0')}`);
+    const diasRealesRow = db.prepare('SELECT value FROM meta WHERE key = ?').get(`dias_reales_${periodos[0].anio}_${String(periodos[0].mes).padStart(2, '0')}`);
     diasReales = diasRealesRow ? Number(diasRealesRow.value) : null;
   }
 
   let mesAnteriorNum = null, anioMesAnterior = null;
-  if (soloUnMes) ({ mesAnteriorNum, anioMesAnterior } = periodoMesAnterior(meses[0], anio));
+  if (soloUnMes) ({ mesAnteriorNum, anioMesAnterior } = periodoMesAnterior(periodos[0].mes, periodos[0].anio));
 
   const CATS = ['Cervezas', 'Aguas', 'Vinos', 'Sidras'];
   // Cuenta clientes distintos que compraron la categoria en CUALQUIERA de los
-  // meses de mesesArr (sumando su HL en esos meses para el umbral) - un
-  // cliente que compro en varios de esos meses cuenta UNA sola vez, nunca
-  // sumado por mes.
-  function contarCompradores(cat, mesesArr, anioQ) {
-    const { clause: mClause, params: mParams } = mesesClause('v', mesesArr);
+  // periodos de periodosArr (sumando su HL en esos periodos para el umbral) -
+  // un cliente que compro en varios de esos periodos cuenta UNA sola vez,
+  // nunca sumado por mes.
+  function contarCompradores(cat, periodosArr) {
+    const { clause: pClause, params: pParams } = periodosClause('v', periodosArr);
     const row = db.prepare(`
       SELECT COUNT(*) as n FROM (
         SELECT v.cliente_id FROM ventas v ${join}
-        WHERE v.categoria = ? AND v.anio = ?${mClause}${clause}
+        WHERE v.categoria = ?${pClause}${clause}
         GROUP BY v.cliente_id HAVING SUM(v.um_hl) >= 0.0001
       )
-    `).get(cat, anioQ, ...mParams, ...params);
+    `).get(cat, ...pParams, ...params);
     return row.n || 0;
   }
   const resultado = {};
   for (const cat of CATS) {
-    const actual = contarCompradores(cat, meses, anio);
-    const anterior = contarCompradores(cat, meses, anio - 1);
+    const actual = contarCompradores(cat, periodos);
+    const anterior = contarCompradores(cat, periodosAnioAnterior(periodos));
     let mesAnterior = null, variacionMesPct = null;
     if (soloUnMes) {
-      mesAnterior = contarCompradores(cat, [mesAnteriorNum], anioMesAnterior);
+      mesAnterior = contarCompradores(cat, [{ anio: anioMesAnterior, mes: mesAnteriorNum }]);
       variacionMesPct = mesAnterior > 0 ? ((actual - mesAnterior) / mesAnterior * 100) : null;
     }
     const proyectado = (diasReales && diasConfigurados) ? (actual / diasReales * diasConfigurados) : null;
@@ -853,7 +894,7 @@ route('GET', '/api/kpis-compradores', async (req, res) => {
     };
   }
   sendJson(res, 200, {
-    meses, anio,
+    periodos,
     mes_anterior_num: mesAnteriorNum,
     anio_mes_anterior: anioMesAnterior,
     dias_configurados: diasConfigurados,
@@ -952,35 +993,35 @@ route('POST', '/api/me/change-password', async (req, res) => {
 route('GET', '/api/ranking/marcas', async (req, res) => {
   if (!requireAuth(req, res, ['admin', 'supervisor', 'vendedor'])) return;
   const parsed = url.parse(req.url, true);
-  const { meses, anio } = parsePeriodo(parsed.query);
+  const periodos = parsePeriodos(parsed.query);
   const categoria = parsed.query.categoria || '';
-  if (!meses.length || !anio || !categoria) return sendJson(res, 400, { error: 'Faltan parametros mes(es), anio y categoria' });
+  if (!periodos.length || !categoria) return sendJson(res, 400, { error: 'Faltan parametros de periodo y categoria' });
   const { clause, params, join } = buildFiltros(parsed.query);
-  const { clause: mClause, params: mParams } = mesesClause('v', meses);
+  const { clause: pClause, params: pParams } = periodosClause('v', periodos);
   const rows = db.prepare(`
     SELECT v.marca as marca, SUM(v.um_hl) as hl FROM ventas v ${join}
-    WHERE v.categoria = ? AND v.anio = ?${mClause}${clause}
+    WHERE v.categoria = ?${pClause}${clause}
     GROUP BY v.marca HAVING SUM(v.um_hl) >= 0.001
     ORDER BY hl DESC
-  `).all(categoria, anio, ...mParams, ...params);
+  `).all(categoria, ...pParams, ...params);
   sendJson(res, 200, rows.map(r => ({ marca: r.marca, hl: Math.round(r.hl * 1000) / 1000 })));
 });
 route('GET', '/api/ranking/clientes', async (req, res) => {
   if (!requireAuth(req, res, ['admin', 'supervisor', 'vendedor'])) return;
   const parsed = url.parse(req.url, true);
-  const { meses, anio } = parsePeriodo(parsed.query);
+  const periodos = parsePeriodos(parsed.query);
   const categoria = parsed.query.categoria || '';
   const marca = parsed.query.marca || '';
-  if (!meses.length || !anio || !categoria || !marca) return sendJson(res, 400, { error: 'Faltan parametros mes(es), anio, categoria y marca' });
+  if (!periodos.length || !categoria || !marca) return sendJson(res, 400, { error: 'Faltan parametros de periodo, categoria y marca' });
   const filtros = buildFiltros(parsed.query);
-  const { clause: mClause, params: mParams } = mesesClause('v', meses);
+  const { clause: pClause, params: pParams } = periodosClause('v', periodos);
   const rows = db.prepare(`
     SELECT v.cliente_id as cliente_id, c.razon_social as razon_social, c.domicilio as domicilio, SUM(v.um_hl) as hl
     FROM ventas v LEFT JOIN clientes c ON c.cliente_id = v.cliente_id
-    WHERE v.categoria = ? AND v.marca = ? AND v.anio = ?${mClause}${filtros.clause}
+    WHERE v.categoria = ? AND v.marca = ?${pClause}${filtros.clause}
     GROUP BY v.cliente_id HAVING SUM(v.um_hl) >= 0.001
     ORDER BY hl DESC LIMIT 15
-  `).all(categoria, marca, anio, ...mParams, ...filtros.params);
+  `).all(categoria, marca, ...pParams, ...filtros.params);
   sendJson(res, 200, rows.map(r => ({
     cliente_id: r.cliente_id,
     razon_social: r.razon_social || '',
@@ -1038,19 +1079,19 @@ route('POST', '/api/referencia/universo', async (req, res) => {
 route('GET', '/api/ranking/clientes-categoria', async (req, res) => {
   if (!requireAuth(req, res, ['admin', 'supervisor', 'vendedor'])) return;
   const parsed = url.parse(req.url, true);
-  const { meses, anio } = parsePeriodo(parsed.query);
+  const periodos = parsePeriodos(parsed.query);
   const categoria = parsed.query.categoria || '';
   const limit = Math.min(Number(parsed.query.limit) || 20, 100);
-  if (!meses.length || !anio || !categoria) return sendJson(res, 400, { error: 'Faltan parametros mes(es), anio y categoria' });
+  if (!periodos.length || !categoria) return sendJson(res, 400, { error: 'Faltan parametros de periodo y categoria' });
   const filtros = buildFiltros(parsed.query);
-  const { clause: mClause, params: mParams } = mesesClause('v', meses);
+  const { clause: pClause, params: pParams } = periodosClause('v', periodos);
   const rows = db.prepare(`
     SELECT v.cliente_id as cliente_id, c.razon_social as razon_social, c.domicilio as domicilio, SUM(v.um_hl) as hl
     FROM ventas v LEFT JOIN clientes c ON c.cliente_id = v.cliente_id
-    WHERE v.categoria = ? AND v.anio = ?${mClause}${filtros.clause}
+    WHERE v.categoria = ?${pClause}${filtros.clause}
     GROUP BY v.cliente_id HAVING SUM(v.um_hl) >= 0.001
     ORDER BY hl DESC LIMIT ?
-  `).all(categoria, anio, ...mParams, ...filtros.params, limit);
+  `).all(categoria, ...pParams, ...filtros.params, limit);
   sendJson(res, 200, rows.map(r => ({
     cliente_id: r.cliente_id,
     razon_social: r.razon_social || '',
@@ -1101,22 +1142,22 @@ function normalizarMarca(marca) {
 route('GET', '/api/canal', async (req, res) => {
   if (!requireAuth(req, res, ['admin', 'supervisor', 'vendedor'])) return;
   const parsed = url.parse(req.url, true);
-  const { meses, anio } = parsePeriodo(parsed.query);
-  if (!meses.length || !anio) return sendJson(res, 400, { error: 'Faltan parametros mes(es) y anio' });
+  const periodos = parsePeriodos(parsed.query);
+  if (!periodos.length) return sendJson(res, 400, { error: 'Faltan parametros de periodo' });
   const { clause, params, join } = buildFiltros(parsed.query);
-  const soloUnMes = meses.length === 1;
+  const soloUnMes = periodos.length === 1;
   let mesAnteriorNum = null, anioMesAnterior = null;
-  if (soloUnMes) ({ mesAnteriorNum, anioMesAnterior } = periodoMesAnterior(meses[0], anio));
+  if (soloUnMes) ({ mesAnteriorNum, anioMesAnterior } = periodoMesAnterior(periodos[0].mes, periodos[0].anio));
   const CATS = ['Cervezas', 'Aguas', 'Vinos', 'Sidras'];
 
-  function volumenPorCanal(mesesArr, anioQ) {
-    const { clause: mClause, params: mParams } = mesesClause('v', mesesArr);
+  function volumenPorCanal(periodosArr) {
+    const { clause: pClause, params: pParams } = periodosClause('v', periodosArr);
     const rows = db.prepare(`
       SELECT v.canal as canal, v.categoria as categoria, SUM(v.um_hl) as hl
       FROM ventas v ${join}
-      WHERE v.anio = ?${mClause}${clause}
+      WHERE 1=1${pClause}${clause}
       GROUP BY v.canal, v.categoria
-    `).all(anioQ, ...mParams, ...params);
+    `).all(...pParams, ...params);
     const out = {};
     for (const r of rows) {
       const canal = r.canal || 'SIN CANAL';
@@ -1126,9 +1167,9 @@ route('GET', '/api/canal', async (req, res) => {
     return out;
   }
 
-  const actualData = volumenPorCanal(meses, anio);
-  const anioAnteriorData = volumenPorCanal(meses, anio - 1);
-  const mesAnteriorData = soloUnMes ? volumenPorCanal([mesAnteriorNum], anioMesAnterior) : {};
+  const actualData = volumenPorCanal(periodos);
+  const anioAnteriorData = volumenPorCanal(periodosAnioAnterior(periodos));
+  const mesAnteriorData = soloUnMes ? volumenPorCanal([{ anio: anioMesAnterior, mes: mesAnteriorNum }]) : {};
   const canales = Array.from(new Set([
     ...Object.keys(actualData), ...Object.keys(anioAnteriorData), ...Object.keys(mesAnteriorData),
   ])).sort();
@@ -1158,7 +1199,7 @@ route('GET', '/api/canal', async (req, res) => {
   totalGeneral.total = { actual: r3(totalGeneral.total.actual), anio_anterior: r3(totalGeneral.total.anio_anterior), mes_anterior: soloUnMes ? r3(totalGeneral.total.mes_anterior) : null };
 
   sendJson(res, 200, {
-    meses, anio, mes_anterior_num: mesAnteriorNum, anio_mes_anterior: anioMesAnterior,
+    periodos, mes_anterior_num: mesAnteriorNum, anio_mes_anterior: anioMesAnterior,
     filas, total_general: totalGeneral,
   });
 });
@@ -1166,28 +1207,28 @@ route('GET', '/api/canal', async (req, res) => {
 route('GET', '/api/canal-compradores', async (req, res) => {
   if (!requireAuth(req, res, ['admin', 'supervisor', 'vendedor'])) return;
   const parsed = url.parse(req.url, true);
-  const { meses, anio } = parsePeriodo(parsed.query);
-  if (!meses.length || !anio) return sendJson(res, 400, { error: 'Faltan parametros mes(es) y anio' });
+  const periodos = parsePeriodos(parsed.query);
+  if (!periodos.length) return sendJson(res, 400, { error: 'Faltan parametros de periodo' });
   const { clause, params, join } = buildFiltros(parsed.query);
-  const soloUnMes = meses.length === 1;
+  const soloUnMes = periodos.length === 1;
   let mesAnteriorNum = null, anioMesAnterior = null;
-  if (soloUnMes) ({ mesAnteriorNum, anioMesAnterior } = periodoMesAnterior(meses[0], anio));
+  if (soloUnMes) ({ mesAnteriorNum, anioMesAnterior } = periodoMesAnterior(periodos[0].mes, periodos[0].anio));
   const CATS = ['Cervezas', 'Aguas', 'Vinos', 'Sidras'];
 
-  // Cliente distinto que compro en CUALQUIERA de los meses de mesesArr
+  // Cliente distinto que compro en CUALQUIERA de los periodos de periodosArr
   // cuenta una sola vez (por canal, por categoria y en el total general) -
   // mismo criterio que contarCompradores en /api/kpis-compradores.
-  function compradoresPorCanal(mesesArr, anioQ) {
-    const { clause: mClause, params: mParams } = mesesClause('v', mesesArr);
+  function compradoresPorCanal(periodosArr) {
+    const { clause: pClause, params: pParams } = periodosClause('v', periodosArr);
     const rows = db.prepare(`
       SELECT canal, categoria, COUNT(*) as n FROM (
         SELECT v.canal as canal, v.categoria as categoria, v.cliente_id as cliente_id, SUM(v.um_hl) as hl
         FROM ventas v ${join}
-        WHERE v.anio = ?${mClause}${clause}
+        WHERE 1=1${pClause}${clause}
         GROUP BY v.canal, v.categoria, v.cliente_id
         HAVING SUM(v.um_hl) >= 0.001
       ) GROUP BY canal, categoria
-    `).all(anioQ, ...mParams, ...params);
+    `).all(...pParams, ...params);
     const porCat = {};
     for (const r of rows) {
       const canal = r.canal || 'SIN CANAL';
@@ -1198,46 +1239,46 @@ route('GET', '/api/canal-compradores', async (req, res) => {
       SELECT canal, COUNT(*) as n FROM (
         SELECT v.canal as canal, v.cliente_id as cliente_id, SUM(v.um_hl) as hl
         FROM ventas v ${join}
-        WHERE v.anio = ?${mClause}${clause}
+        WHERE 1=1${pClause}${clause}
         GROUP BY v.canal, v.cliente_id
         HAVING SUM(v.um_hl) >= 0.001
       ) GROUP BY canal
-    `).all(anioQ, ...mParams, ...params);
+    `).all(...pParams, ...params);
     const totales = {};
     for (const r of totalRows) totales[r.canal || 'SIN CANAL'] = r.n;
     return { porCat, totales };
   }
 
-  function totalPorCategoria(mesesArr, anioQ) {
-    const { clause: mClause, params: mParams } = mesesClause('v', mesesArr);
+  function totalPorCategoria(periodosArr) {
+    const { clause: pClause, params: pParams } = periodosClause('v', periodosArr);
     const rows = db.prepare(`
       SELECT categoria, COUNT(*) as n FROM (
         SELECT v.categoria as categoria, v.cliente_id as cliente_id, SUM(v.um_hl) as hl
         FROM ventas v ${join}
-        WHERE v.anio = ?${mClause}${clause}
+        WHERE 1=1${pClause}${clause}
         GROUP BY v.categoria, v.cliente_id
         HAVING SUM(v.um_hl) >= 0.001
       ) GROUP BY categoria
-    `).all(anioQ, ...mParams, ...params);
+    `).all(...pParams, ...params);
     const out = {};
     for (const r of rows) out[r.categoria] = r.n;
     return out;
   }
-  function totalGeneralClientes(mesesArr, anioQ) {
-    const { clause: mClause, params: mParams } = mesesClause('v', mesesArr);
+  function totalGeneralClientes(periodosArr) {
+    const { clause: pClause, params: pParams } = periodosClause('v', periodosArr);
     const row = db.prepare(`
       SELECT COUNT(*) as n FROM (
         SELECT v.cliente_id FROM ventas v ${join}
-        WHERE v.anio = ?${mClause}${clause}
+        WHERE 1=1${pClause}${clause}
         GROUP BY v.cliente_id HAVING SUM(v.um_hl) >= 0.001
       )
-    `).get(anioQ, ...mParams, ...params);
+    `).get(...pParams, ...params);
     return row.n || 0;
   }
 
-  const actualData = compradoresPorCanal(meses, anio);
-  const anioAnteriorData = compradoresPorCanal(meses, anio - 1);
-  const mesAnteriorData = soloUnMes ? compradoresPorCanal([mesAnteriorNum], anioMesAnterior) : { porCat: {}, totales: {} };
+  const actualData = compradoresPorCanal(periodos);
+  const anioAnteriorData = compradoresPorCanal(periodosAnioAnterior(periodos));
+  const mesAnteriorData = soloUnMes ? compradoresPorCanal([{ anio: anioMesAnterior, mes: mesAnteriorNum }]) : { porCat: {}, totales: {} };
   const canales = Array.from(new Set([
     ...Object.keys(actualData.totales), ...Object.keys(anioAnteriorData.totales), ...Object.keys(mesAnteriorData.totales),
   ])).sort();
@@ -1262,15 +1303,15 @@ route('GET', '/api/canal-compradores', async (req, res) => {
   }
 
   const filas = canales.map(armarFila);
-  const totalCatActual = totalPorCategoria(meses, anio);
-  const totalCatAnioAnt = totalPorCategoria(meses, anio - 1);
-  const totalCatMesAnt = soloUnMes ? totalPorCategoria([mesAnteriorNum], anioMesAnterior) : {};
+  const totalCatActual = totalPorCategoria(periodos);
+  const totalCatAnioAnt = totalPorCategoria(periodosAnioAnterior(periodos));
+  const totalCatMesAnt = soloUnMes ? totalPorCategoria([{ anio: anioMesAnterior, mes: mesAnteriorNum }]) : {};
   const totalGeneral = {
     categorias: {},
     total: {
-      actual: totalGeneralClientes(meses, anio),
-      anio_anterior: totalGeneralClientes(meses, anio - 1),
-      mes_anterior: soloUnMes ? totalGeneralClientes([mesAnteriorNum], anioMesAnterior) : null,
+      actual: totalGeneralClientes(periodos),
+      anio_anterior: totalGeneralClientes(periodosAnioAnterior(periodos)),
+      mes_anterior: soloUnMes ? totalGeneralClientes([{ anio: anioMesAnterior, mes: mesAnteriorNum }]) : null,
     },
   };
   for (const cat of CATS) {
@@ -1282,7 +1323,7 @@ route('GET', '/api/canal-compradores', async (req, res) => {
   }
 
   sendJson(res, 200, {
-    meses, anio, mes_anterior_num: mesAnteriorNum, anio_mes_anterior: anioMesAnterior,
+    periodos, mes_anterior_num: mesAnteriorNum, anio_mes_anterior: anioMesAnterior,
     filas, total_general: totalGeneral,
   });
 });
@@ -1294,22 +1335,22 @@ route('GET', '/api/canal-compradores', async (req, res) => {
 route('GET', '/api/marca-canal', async (req, res) => {
   if (!requireAuth(req, res, ['admin', 'supervisor', 'vendedor'])) return;
   const parsed = url.parse(req.url, true);
-  const { meses, anio } = parsePeriodo(parsed.query);
+  const periodos = parsePeriodos(parsed.query);
   const categoria = parsed.query.categoria || '';
-  if (!meses.length || !anio || !categoria) return sendJson(res, 400, { error: 'Faltan parametros mes(es), anio y categoria' });
+  if (!periodos.length || !categoria) return sendJson(res, 400, { error: 'Faltan parametros de periodo y categoria' });
   const { clause, params, join } = buildFiltros(parsed.query);
-  const soloUnMes = meses.length === 1;
+  const soloUnMes = periodos.length === 1;
   let mesAnteriorNum = null, anioMesAnterior = null;
-  if (soloUnMes) ({ mesAnteriorNum, anioMesAnterior } = periodoMesAnterior(meses[0], anio));
+  if (soloUnMes) ({ mesAnteriorNum, anioMesAnterior } = periodoMesAnterior(periodos[0].mes, periodos[0].anio));
 
-  function volumenPorMarca(mesesArr, anioQ) {
-    const { clause: mClause, params: mParams } = mesesClause('v', mesesArr);
+  function volumenPorMarca(periodosArr) {
+    const { clause: pClause, params: pParams } = periodosClause('v', periodosArr);
     const rows = db.prepare(`
       SELECT v.marca as marca, v.canal as canal, SUM(v.um_hl) as hl
       FROM ventas v ${join}
-      WHERE v.categoria = ? AND v.anio = ?${mClause}${clause}
+      WHERE v.categoria = ?${pClause}${clause}
       GROUP BY v.marca, v.canal
-    `).all(categoria, anioQ, ...mParams, ...params);
+    `).all(categoria, ...pParams, ...params);
     const out = {};
     for (const r of rows) {
       const marca = normalizarMarca(r.marca || 'SIN MARCA');
@@ -1320,9 +1361,9 @@ route('GET', '/api/marca-canal', async (req, res) => {
     return out;
   }
 
-  const actualData = volumenPorMarca(meses, anio);
-  const anioAnteriorData = volumenPorMarca(meses, anio - 1);
-  const mesAnteriorData = soloUnMes ? volumenPorMarca([mesAnteriorNum], anioMesAnterior) : {};
+  const actualData = volumenPorMarca(periodos);
+  const anioAnteriorData = volumenPorMarca(periodosAnioAnterior(periodos));
+  const mesAnteriorData = soloUnMes ? volumenPorMarca([{ anio: anioMesAnterior, mes: mesAnteriorNum }]) : {};
   const marcas = Array.from(new Set([
     ...Object.keys(actualData), ...Object.keys(anioAnteriorData), ...Object.keys(mesAnteriorData),
   ])).sort();
@@ -1357,7 +1398,7 @@ route('GET', '/api/marca-canal', async (req, res) => {
   totalGeneral.total = { actual: r3(totalGeneral.total.actual), anio_anterior: r3(totalGeneral.total.anio_anterior), mes_anterior: soloUnMes ? r3(totalGeneral.total.mes_anterior) : null };
 
   sendJson(res, 200, {
-    meses, anio, mes_anterior_num: mesAnteriorNum, anio_mes_anterior: anioMesAnterior,
+    periodos, mes_anterior_num: mesAnteriorNum, anio_mes_anterior: anioMesAnterior,
     grupos: canales, filas, total_general: totalGeneral,
   });
 });
@@ -1367,29 +1408,29 @@ route('GET', '/api/marca-canal', async (req, res) => {
 route('GET', '/api/marca-canal-compradores', async (req, res) => {
   if (!requireAuth(req, res, ['admin', 'supervisor', 'vendedor'])) return;
   const parsed = url.parse(req.url, true);
-  const { meses, anio } = parsePeriodo(parsed.query);
+  const periodos = parsePeriodos(parsed.query);
   const categoria = parsed.query.categoria || '';
-  if (!meses.length || !anio || !categoria) return sendJson(res, 400, { error: 'Faltan parametros mes(es), anio y categoria' });
+  if (!periodos.length || !categoria) return sendJson(res, 400, { error: 'Faltan parametros de periodo y categoria' });
   const { clause, params, join } = buildFiltros(parsed.query);
-  const soloUnMes = meses.length === 1;
+  const soloUnMes = periodos.length === 1;
   let mesAnteriorNum = null, anioMesAnterior = null;
-  if (soloUnMes) ({ mesAnteriorNum, anioMesAnterior } = periodoMesAnterior(meses[0], anio));
+  if (soloUnMes) ({ mesAnteriorNum, anioMesAnterior } = periodoMesAnterior(periodos[0].mes, periodos[0].anio));
 
-  // Cliente distinto que compro esa marca en CUALQUIERA de los meses de
-  // mesesArr cuenta una sola vez (por canal), no una vez por mes.
-  function compradoresPorMarca(mesesArr, anioQ) {
-    const { clause: mClause, params: mParams } = mesesClause('v', mesesArr);
+  // Cliente distinto que compro esa marca en CUALQUIERA de los periodos de
+  // periodosArr cuenta una sola vez (por canal), no una vez por mes.
+  function compradoresPorMarca(periodosArr) {
+    const { clause: pClause, params: pParams } = periodosClause('v', periodosArr);
     const rows = db.prepare(`
       SELECT marca, canal, COUNT(*) as n FROM (
         SELECT
           CASE WHEN v.marca = 'AMSTEL IPANEMA' THEN 'AMSTEL LAGER' ELSE v.marca END as marca,
           v.canal as canal, v.cliente_id as cliente_id, SUM(v.um_hl) as hl
         FROM ventas v ${join}
-        WHERE v.categoria = ? AND v.anio = ?${mClause}${clause}
+        WHERE v.categoria = ?${pClause}${clause}
         GROUP BY marca, v.canal, v.cliente_id
         HAVING SUM(v.um_hl) >= 0.001
       ) GROUP BY marca, canal
-    `).all(categoria, anioQ, ...mParams, ...params);
+    `).all(categoria, ...pParams, ...params);
     const out = {};
     for (const r of rows) {
       const marca = r.marca || 'SIN MARCA';
@@ -1400,9 +1441,9 @@ route('GET', '/api/marca-canal-compradores', async (req, res) => {
     return out;
   }
 
-  const actualData = compradoresPorMarca(meses, anio);
-  const anioAnteriorData = compradoresPorMarca(meses, anio - 1);
-  const mesAnteriorData = soloUnMes ? compradoresPorMarca([mesAnteriorNum], anioMesAnterior) : {};
+  const actualData = compradoresPorMarca(periodos);
+  const anioAnteriorData = compradoresPorMarca(periodosAnioAnterior(periodos));
+  const mesAnteriorData = soloUnMes ? compradoresPorMarca([{ anio: anioMesAnterior, mes: mesAnteriorNum }]) : {};
   const marcas = Array.from(new Set([
     ...Object.keys(actualData), ...Object.keys(anioAnteriorData), ...Object.keys(mesAnteriorData),
   ])).sort();
@@ -1436,33 +1477,33 @@ route('GET', '/api/marca-canal-compradores', async (req, res) => {
   // (agrupando marcas) y en total (agrupando canales tambien), igual que
   // hace /api/kpis-compradores para la tarjeta "Compradores" de arriba
   // (mismo umbral 0.0001, para que el numero coincida con esa tarjeta). Con
-  // varios meses seleccionados, cuenta clientes que compraron al menos una
-  // vez en CUALQUIERA de esos meses (nunca sumado por mes).
-  function compradoresDistintosPorCanal(mesesArr, anioQ) {
-    const { clause: mClause, params: mParams } = mesesClause('v', mesesArr);
+  // varios periodos seleccionados, cuenta clientes que compraron al menos
+  // una vez en CUALQUIERA de esos periodos (nunca sumado por mes).
+  function compradoresDistintosPorCanal(periodosArr) {
+    const { clause: pClause, params: pParams } = periodosClause('v', periodosArr);
     const porCanalRows = db.prepare(`
       SELECT canal, COUNT(*) as n FROM (
         SELECT v.canal as canal, v.cliente_id as cliente_id, SUM(v.um_hl) as hl
         FROM ventas v ${join}
-        WHERE v.categoria = ? AND v.anio = ?${mClause}${clause}
+        WHERE v.categoria = ?${pClause}${clause}
         GROUP BY v.canal, v.cliente_id
         HAVING SUM(v.um_hl) >= 0.0001
       ) GROUP BY canal
-    `).all(categoria, anioQ, ...mParams, ...params);
+    `).all(categoria, ...pParams, ...params);
     const porCanal = {};
     for (const r of porCanalRows) porCanal[r.canal || 'SIN CANAL'] = r.n;
     const totalRow = db.prepare(`
       SELECT COUNT(*) as n FROM (
         SELECT v.cliente_id FROM ventas v ${join}
-        WHERE v.categoria = ? AND v.anio = ?${mClause}${clause}
+        WHERE v.categoria = ?${pClause}${clause}
         GROUP BY v.cliente_id HAVING SUM(v.um_hl) >= 0.0001
       )
-    `).get(categoria, anioQ, ...mParams, ...params);
+    `).get(categoria, ...pParams, ...params);
     return { porCanal, total: totalRow.n || 0 };
   }
-  const totalesActual = compradoresDistintosPorCanal(meses, anio);
-  const totalesAnioAnt = compradoresDistintosPorCanal(meses, anio - 1);
-  const totalesMesAnt = soloUnMes ? compradoresDistintosPorCanal([mesAnteriorNum], anioMesAnterior) : { porCanal: {}, total: 0 };
+  const totalesActual = compradoresDistintosPorCanal(periodos);
+  const totalesAnioAnt = compradoresDistintosPorCanal(periodosAnioAnterior(periodos));
+  const totalesMesAnt = soloUnMes ? compradoresDistintosPorCanal([{ anio: anioMesAnterior, mes: mesAnteriorNum }]) : { porCanal: {}, total: 0 };
   const totalGeneral = {
     porGrupo: {},
     total: {
@@ -1480,45 +1521,45 @@ route('GET', '/api/marca-canal-compradores', async (req, res) => {
   }
 
   sendJson(res, 200, {
-    meses, anio, mes_anterior_num: mesAnteriorNum, anio_mes_anterior: anioMesAnterior,
+    periodos, mes_anterior_num: mesAnteriorNum, anio_mes_anterior: anioMesAnterior,
     grupos: canales, filas, total_general: totalGeneral,
   });
 });
 
 // Volumen (HL) por ARTICULO para UNA marca de UNA categoria puntual -
 // drill-down al hacer clic en el nombre de una marca dentro de "Volumen por
-// marca y canal". Misma logica de periodo (multi-mes) y misma forma de
+// marca y canal". Misma logica de periodo (multi-periodo) y misma forma de
 // columnas (actual / año anterior / [mes anterior], este ultimo solo con un
 // mes seleccionado) que el resto de los endpoints de periodo.
 route('GET', '/api/marca-articulo', async (req, res) => {
   if (!requireAuth(req, res, ['admin', 'supervisor', 'vendedor'])) return;
   const parsed = url.parse(req.url, true);
-  const { meses, anio } = parsePeriodo(parsed.query);
+  const periodos = parsePeriodos(parsed.query);
   const categoria = parsed.query.categoria || '';
   const marca = parsed.query.marca || '';
-  if (!meses.length || !anio || !categoria || !marca) return sendJson(res, 400, { error: 'Faltan parametros mes(es), anio, categoria y marca' });
+  if (!periodos.length || !categoria || !marca) return sendJson(res, 400, { error: 'Faltan parametros de periodo, categoria y marca' });
   const { clause, params, join } = buildFiltros(parsed.query);
-  const soloUnMes = meses.length === 1;
+  const soloUnMes = periodos.length === 1;
   let mesAnteriorNum = null, anioMesAnterior = null;
-  if (soloUnMes) ({ mesAnteriorNum, anioMesAnterior } = periodoMesAnterior(meses[0], anio));
+  if (soloUnMes) ({ mesAnteriorNum, anioMesAnterior } = periodoMesAnterior(periodos[0].mes, periodos[0].anio));
   const marcaCase = `CASE WHEN v.marca = 'AMSTEL IPANEMA' THEN 'AMSTEL LAGER' ELSE v.marca END`;
 
-  function volumenPorArticulo(mesesArr, anioQ) {
-    const { clause: mClause, params: mParams } = mesesClause('v', mesesArr);
+  function volumenPorArticulo(periodosArr) {
+    const { clause: pClause, params: pParams } = periodosClause('v', periodosArr);
     const rows = db.prepare(`
       SELECT v.articulo as articulo, SUM(v.um_hl) as hl
       FROM ventas v ${join}
-      WHERE v.categoria = ? AND ${marcaCase} = ? AND v.anio = ?${mClause}${clause}
+      WHERE v.categoria = ? AND ${marcaCase} = ?${pClause}${clause}
       GROUP BY v.articulo
-    `).all(categoria, marca, anioQ, ...mParams, ...params);
+    `).all(categoria, marca, ...pParams, ...params);
     const out = {};
     for (const r of rows) out[r.articulo || 'SIN ARTICULO'] = r.hl || 0;
     return out;
   }
 
-  const actualData = volumenPorArticulo(meses, anio);
-  const anioAnteriorData = volumenPorArticulo(meses, anio - 1);
-  const mesAnteriorData = soloUnMes ? volumenPorArticulo([mesAnteriorNum], anioMesAnterior) : {};
+  const actualData = volumenPorArticulo(periodos);
+  const anioAnteriorData = volumenPorArticulo(periodosAnioAnterior(periodos));
+  const mesAnteriorData = soloUnMes ? volumenPorArticulo([{ anio: anioMesAnterior, mes: mesAnteriorNum }]) : {};
   const articulos = Array.from(new Set([
     ...Object.keys(actualData), ...Object.keys(anioAnteriorData), ...Object.keys(mesAnteriorData),
   ])).sort();
@@ -1537,7 +1578,7 @@ route('GET', '/api/marca-articulo', async (req, res) => {
   const totalGeneral = { actual: r3(tA), anio_anterior: r3(tAA), mes_anterior: soloUnMes ? r3(tMA) : null };
 
   sendJson(res, 200, {
-    meses, anio, mes_anterior_num: mesAnteriorNum, anio_mes_anterior: anioMesAnterior,
+    periodos, mes_anterior_num: mesAnteriorNum, anio_mes_anterior: anioMesAnterior,
     marca, categoria, filas, total_general: totalGeneral,
   });
 });
@@ -1550,48 +1591,48 @@ route('GET', '/api/marca-articulo', async (req, res) => {
 route('GET', '/api/marca-articulo-compradores', async (req, res) => {
   if (!requireAuth(req, res, ['admin', 'supervisor', 'vendedor'])) return;
   const parsed = url.parse(req.url, true);
-  const { meses, anio } = parsePeriodo(parsed.query);
+  const periodos = parsePeriodos(parsed.query);
   const categoria = parsed.query.categoria || '';
   const marca = parsed.query.marca || '';
-  if (!meses.length || !anio || !categoria || !marca) return sendJson(res, 400, { error: 'Faltan parametros mes(es), anio, categoria y marca' });
+  if (!periodos.length || !categoria || !marca) return sendJson(res, 400, { error: 'Faltan parametros de periodo, categoria y marca' });
   const { clause, params, join } = buildFiltros(parsed.query);
-  const soloUnMes = meses.length === 1;
+  const soloUnMes = periodos.length === 1;
   let mesAnteriorNum = null, anioMesAnterior = null;
-  if (soloUnMes) ({ mesAnteriorNum, anioMesAnterior } = periodoMesAnterior(meses[0], anio));
+  if (soloUnMes) ({ mesAnteriorNum, anioMesAnterior } = periodoMesAnterior(periodos[0].mes, periodos[0].anio));
   const marcaCase = `CASE WHEN v.marca = 'AMSTEL IPANEMA' THEN 'AMSTEL LAGER' ELSE v.marca END`;
 
-  function compradoresPorArticulo(mesesArr, anioQ) {
-    const { clause: mClause, params: mParams } = mesesClause('v', mesesArr);
+  function compradoresPorArticulo(periodosArr) {
+    const { clause: pClause, params: pParams } = periodosClause('v', periodosArr);
     const rows = db.prepare(`
       SELECT articulo, COUNT(*) as n FROM (
         SELECT v.articulo as articulo, v.cliente_id as cliente_id, SUM(v.um_hl) as hl
         FROM ventas v ${join}
-        WHERE v.categoria = ? AND ${marcaCase} = ? AND v.anio = ?${mClause}${clause}
+        WHERE v.categoria = ? AND ${marcaCase} = ?${pClause}${clause}
         GROUP BY v.articulo, v.cliente_id
         HAVING SUM(v.um_hl) >= 0.001
       ) GROUP BY articulo
-    `).all(categoria, marca, anioQ, ...mParams, ...params);
+    `).all(categoria, marca, ...pParams, ...params);
     const out = {};
     for (const r of rows) out[r.articulo || 'SIN ARTICULO'] = r.n;
     return out;
   }
   // Total de la marca (no sumado por articulo, sino contado directo) - un
   // cliente que compro 2 articulos de la marca cuenta 1 sola vez.
-  function totalMarcaDistintos(mesesArr, anioQ) {
-    const { clause: mClause, params: mParams } = mesesClause('v', mesesArr);
+  function totalMarcaDistintos(periodosArr) {
+    const { clause: pClause, params: pParams } = periodosClause('v', periodosArr);
     const row = db.prepare(`
       SELECT COUNT(*) as n FROM (
         SELECT v.cliente_id FROM ventas v ${join}
-        WHERE v.categoria = ? AND ${marcaCase} = ? AND v.anio = ?${mClause}${clause}
+        WHERE v.categoria = ? AND ${marcaCase} = ?${pClause}${clause}
         GROUP BY v.cliente_id HAVING SUM(v.um_hl) >= 0.001
       )
-    `).get(categoria, marca, anioQ, ...mParams, ...params);
+    `).get(categoria, marca, ...pParams, ...params);
     return row.n || 0;
   }
 
-  const actualData = compradoresPorArticulo(meses, anio);
-  const anioAnteriorData = compradoresPorArticulo(meses, anio - 1);
-  const mesAnteriorData = soloUnMes ? compradoresPorArticulo([mesAnteriorNum], anioMesAnterior) : {};
+  const actualData = compradoresPorArticulo(periodos);
+  const anioAnteriorData = compradoresPorArticulo(periodosAnioAnterior(periodos));
+  const mesAnteriorData = soloUnMes ? compradoresPorArticulo([{ anio: anioMesAnterior, mes: mesAnteriorNum }]) : {};
   const articulos = Array.from(new Set([
     ...Object.keys(actualData), ...Object.keys(anioAnteriorData), ...Object.keys(mesAnteriorData),
   ])).sort();
@@ -1607,13 +1648,13 @@ route('GET', '/api/marca-articulo-compradores', async (req, res) => {
   const filas = articulos.map(armarFila).sort((a, b) => b.actual - a.actual);
 
   const totalGeneral = {
-    actual: totalMarcaDistintos(meses, anio),
-    anio_anterior: totalMarcaDistintos(meses, anio - 1),
-    mes_anterior: soloUnMes ? totalMarcaDistintos([mesAnteriorNum], anioMesAnterior) : null,
+    actual: totalMarcaDistintos(periodos),
+    anio_anterior: totalMarcaDistintos(periodosAnioAnterior(periodos)),
+    mes_anterior: soloUnMes ? totalMarcaDistintos([{ anio: anioMesAnterior, mes: mesAnteriorNum }]) : null,
   };
 
   sendJson(res, 200, {
-    meses, anio, mes_anterior_num: mesAnteriorNum, anio_mes_anterior: anioMesAnterior,
+    periodos, mes_anterior_num: mesAnteriorNum, anio_mes_anterior: anioMesAnterior,
     marca, categoria, filas, total_general: totalGeneral,
   });
 });
