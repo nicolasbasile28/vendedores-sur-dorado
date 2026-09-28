@@ -1,1736 +1,1654 @@
-// server.js - Servidor HTTP principal
-const http = require('http');
-const fs = require('fs');
-const path = require('path');
-const url = require('url');
-const db = require('./db');
-const authLib = require('./auth');
-const XLSX = require('xlsx');
-const ExcelJS = require('exceljs');
-const crypto = require('crypto');
-const PORT = process.env.PORT || 3000;
-const PUBLIC_DIR = path.join(__dirname, '..', 'public');
-function sendJson(res, status, obj) {
-  const body = JSON.stringify(obj);
-  res.writeHead(status, {
-    'Content-Type': 'application/json; charset=utf-8',
-    'Access-Control-Allow-Origin': '*',
-  });
-  res.end(body);
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Sur Dorado - Visor Comercial</title>
+<style>
+  :root{
+    --bordo:#5a2a2a; --bordo2:#7a3a3a; --dorado:#e8c987;
+    --bg:#12141c; --card:#1b1f2e; --card2:#232838;
+    --text:#f2f0ee; --text2:#a9a5b0; --border:#2f3446;
+    --ok:#4caf6a; --bad:#e05a5a;
+  }
+  *{box-sizing:border-box;}
+  body{
+    margin:0; font-family:-apple-system,Segoe UI,Roboto,Arial,sans-serif;
+    background:var(--bg); color:var(--text); min-height:100vh;
+  }
+  .topbar{
+    background:var(--bordo); padding:14px 20px; display:flex;
+    justify-content:space-between; align-items:center; flex-wrap:wrap; gap:10px;
+  }
+  .topbar .brand{font-weight:800; font-size:18px;}
+  .topbar .brand span{color:var(--dorado);}
+  .topbar button{
+    background:transparent; border:1px solid rgba(255,255,255,.4); color:#fff;
+    padding:6px 14px; border-radius:6px; cursor:pointer; font-size:13px;
+  }
+  .wrap{max-width:1100px; margin:0 auto; padding:20px;}
+  .periodo{
+    display:flex; align-items:center; gap:10px; margin-bottom:18px; flex-wrap:wrap;
+    color:var(--text2); font-size:14px;
+  }
+  .periodo input{
+    background:var(--card2); border:1px solid var(--border); color:var(--text);
+    padding:6px 8px; border-radius:6px; width:70px; font-size:14px;
+  }
+  .periodo select{
+    background:var(--card2); border:1px solid var(--border); color:var(--text);
+    padding:6px 8px; border-radius:6px; font-size:14px;
+  }
+  .ms{position:relative; display:inline-block;}
+  .ms-btn{
+    background:var(--card2); border:1px solid var(--border); color:var(--text);
+    padding:6px 10px; border-radius:6px; font-size:14px; cursor:pointer;
+  }
+  .ms-btn.activo{border-color:var(--dorado); color:var(--dorado);}
+  .ms-panel{
+    position:absolute; top:calc(100% + 4px); left:0; z-index:20;
+    background:var(--card2); border:1px solid var(--border); border-radius:8px;
+    padding:8px; min-width:220px; max-height:260px; overflow-y:auto;
+    box-shadow:0 6px 20px rgba(0,0,0,.4);
+  }
+  .ms-panel .ms-option{
+    display:flex; align-items:center; gap:8px; padding:5px 4px; font-size:13px; cursor:pointer; border-radius:4px;
+  }
+  .ms-panel .ms-option:hover{background:rgba(255,255,255,.06);}
+  .ms-panel .ms-option input{margin:0;}
+  .ms-panel .ms-actions{
+    display:flex; justify-content:space-between; padding:4px 4px 2px; margin-top:4px;
+    border-top:1px solid var(--border); font-size:12px;
+  }
+  .ms-panel .ms-actions a{color:var(--text2); cursor:pointer; text-decoration:underline;}
+  .ms-empty{font-size:12px; color:var(--text2); padding:6px 4px;}
+  .periodo button{
+    background:var(--bordo); color:#fff; border:none; padding:7px 14px;
+    border-radius:6px; cursor:pointer; font-size:13px;
+  }
+  .dias-progreso{
+    display:flex; gap:10px; flex-wrap:wrap; align-items:center; margin-bottom:18px;
+  }
+  .dias-progreso .item{
+    background:var(--card); border:1px solid var(--border); border-radius:8px;
+    padding:8px 14px; font-size:13px; color:var(--text2);
+  }
+  .dias-progreso .item b{color:var(--dorado); font-size:17px; margin-left:6px;}
+  .kpi-grid{
+    display:grid; grid-template-columns:repeat(auto-fit, minmax(220px,1fr));
+    gap:16px; margin-bottom:24px;
+  }
+  .kpi-card{
+    background:var(--card); border:1px solid var(--border); border-radius:12px;
+    padding:18px;
+  }
+  .kpi-card h3{margin:0 0 12px; font-size:14px; color:var(--dorado); text-transform:uppercase; letter-spacing:.5px;}
+  .kpi-main{font-size:28px; font-weight:800; margin-bottom:4px;}
+  .kpi-sub{font-size:12px; color:var(--text2); margin-bottom:10px;}
+  .kpi-row{display:flex; justify-content:space-between; font-size:13px; padding:4px 0; border-top:1px solid var(--border);}
+  .kpi-row span:first-child{color:var(--text2);}
+  .badge{padding:2px 8px; border-radius:10px; font-size:12px; font-weight:700;}
+  .badge.up{background:rgba(76,175,106,.15); color:var(--ok);}
+  .badge.down{background:rgba(224,90,90,.15); color:var(--bad);}
+  .badge.neutral{background:rgba(169,165,176,.15); color:var(--text2);}
+  .section{
+    background:var(--card); border:1px solid var(--border); border-radius:12px;
+    padding:18px; margin-bottom:20px;
+  }
+  .section h2{margin:0 0 14px; font-size:15px; color:var(--dorado);}
+  .config-row{display:flex; gap:10px; align-items:center; flex-wrap:wrap;}
+  .config-row input{
+    background:var(--card2); border:1px solid var(--border); color:var(--text);
+    padding:8px 10px; border-radius:6px; width:100px; font-size:14px;
+  }
+  .config-row button{
+    background:var(--bordo); color:#fff; border:none; padding:8px 16px;
+    border-radius:6px; cursor:pointer; font-size:13px;
+  }
+  .note{font-size:12px; color:var(--text2); margin-top:8px;}
+  .msg{padding:8px 12px; border-radius:6px; font-size:13px; margin-top:8px; display:none;}
+  .msg.ok{background:rgba(76,175,106,.15); color:var(--ok); display:block;}
+  .msg.err{background:rgba(224,90,90,.15); color:var(--bad); display:block;}
+  #loginScreen{display:flex; align-items:center; justify-content:center; min-height:100vh;}
+  #loginScreen .card{
+    background:var(--card); border:1px solid var(--border); border-radius:12px;
+    padding:28px; width:300px; text-align:center;
+  }
+  #loginScreen h1{font-size:22px; margin:0 0 4px;}
+  #loginScreen h1 span{color:var(--dorado);}
+  #loginScreen .sub{color:var(--text2); font-size:13px; margin-bottom:18px;}
+  #loginScreen input{
+    width:100%; background:var(--card2); border:1px solid var(--border); color:var(--text);
+    padding:10px; border-radius:6px; margin-bottom:10px; font-size:14px;
+  }
+  #loginScreen button{
+    width:100%; background:var(--bordo); color:#fff; border:none; padding:10px;
+    border-radius:6px; cursor:pointer; font-weight:700; font-size:14px; margin-top:6px;
+  }
+  .hidden{display:none !important;}
+  .loading{color:var(--text2); font-size:13px; padding:20px; text-align:center;}
+</style>
+</head>
+<body>
+
+<div id="loginScreen">
+  <div class="card">
+    <h1>SUR <span>DORADO</span></h1>
+    <div class="sub">Visor Comercial</div>
+    <div id="loginMsg" class="msg err"></div>
+    <input id="loginUser" type="text" placeholder="Usuario">
+    <input id="loginPass" type="password" placeholder="Contraseña">
+    <button onclick="doLogin()">Ingresar</button>
+  </div>
+</div>
+
+<div id="mainScreen" class="hidden">
+  <div class="topbar">
+    <div class="brand">SUR <span>DORADO</span> · Visor Comercial</div>
+    <div>
+      <button id="tabBtnVolumen" onclick="showTab('volumen')" style="background:rgba(255,255,255,.15); margin-right:6px;">Volumen</button>
+      <button id="tabBtnCompradores" onclick="showTab('compradores')" style="margin-right:6px;">Compradores</button>
+      <button id="tabBtnConfig" onclick="showTab('config')" style="margin-right:14px;">Configuración</button>
+      <span id="userLabel" style="margin-right:14px; font-size:13px; color:#ddd;"></span>
+      <button onclick="doLogout()">Salir</button>
+    </div>
+  </div>
+  <div class="wrap">
+
+    <div id="periodoFiltrosWrap">
+      <div class="periodo">
+        <span>Periodo:</span>
+        <div class="ms" id="ms-filtroMeses" data-label="Meses">
+          <button type="button" class="ms-btn" onclick="toggleMs('filtroMeses')">Meses (todos)</button>
+          <div class="ms-panel hidden"></div>
+        </div>
+        <button onclick="limpiarMeses()" style="background:transparent; border:1px solid var(--border); color:var(--text2);">Limpiar</button>
+        <button onclick="loadKpis()">Ver</button>
+        <span id="periodoNote" style="font-size:12px;"></span>
+      </div>
+
+      <div class="dias-progreso hidden" id="diasProgresoBar">
+        <span class="item">Días trabajados<b id="diasProgresoTrabajados">-</b></span>
+        <span class="item">Días del mes<b id="diasProgresoConfigurados">-</b></span>
+        <span class="item">Faltan<b id="diasProgresoFaltan">-</b></span>
+      </div>
+
+      <div class="periodo" id="filtrosArea">
+        <span>Filtros:</span>
+        <div class="ms" id="ms-filtroSupervisor" data-label="Supervisor">
+          <button type="button" class="ms-btn" onclick="toggleMs('filtroSupervisor')">Supervisor (todos)</button>
+          <div class="ms-panel hidden"></div>
+        </div>
+        <div class="ms" id="ms-filtroVendedor" data-label="Vendedor">
+          <button type="button" class="ms-btn" onclick="toggleMs('filtroVendedor')">Vendedor (todos)</button>
+          <div class="ms-panel hidden"></div>
+        </div>
+        <div class="ms" id="ms-filtroDia" data-label="Día">
+          <button type="button" class="ms-btn" onclick="toggleMs('filtroDia')">Día (todos)</button>
+          <div class="ms-panel hidden"></div>
+        </div>
+        <div class="ms" id="ms-filtroCamionero" data-label="Camionero">
+          <button type="button" class="ms-btn" onclick="toggleMs('filtroCamionero')">Camionero (todos)</button>
+          <div class="ms-panel hidden"></div>
+        </div>
+        <button onclick="limpiarFiltros()" style="background:transparent; border:1px solid var(--border); color:var(--text2);">Limpiar</button>
+      </div>
+    </div>
+
+    <div id="tabVolumen">
+
+    <div id="kpiArea">
+      <div class="loading">Cargando datos...</div>
+    </div>
+
+    <div class="section">
+      <h2>Volumen por canal</h2>
+      <div style="overflow-x:auto;">
+        <table style="width:100%; border-collapse:collapse; font-size:12px; white-space:nowrap;" id="canalVolumenTable">
+          <thead></thead>
+          <tbody><tr><td style="padding:10px;">Cargando...</td></tr></tbody>
+        </table>
+      </div>
+    </div>
+
+    <div class="section">
+      <h2>Ranking de marcas</h2>
+      <div class="config-row" style="margin-bottom:14px;">
+        <label>Categoría:</label>
+        <select id="catRankingSelect" onchange="loadRankingMarcas()">
+          <option value="Cervezas">🍺 Cervezas</option>
+          <option value="Aguas">💧 Aguas</option>
+          <option value="Vinos">🍷 Vinos</option>
+          <option value="Sidras">🍎 Sidras</option>
+        </select>
+      </div>
+      <div id="rankingArea"><div class="loading">Elegí "Ver" arriba para cargar el ranking.</div></div>
+    </div>
+
+    <div class="section" id="drillDownSection" style="display:none;">
+      <h2 id="drillDownTitle">Top clientes</h2>
+      <button onclick="exportarClientesExcel()" style="background:var(--bordo); color:#fff; border:none; padding:7px 14px; border-radius:6px; cursor:pointer; font-size:13px; margin-bottom:12px;">Exportar a Excel</button>
+      <div style="overflow-x:auto;">
+        <table style="width:100%; border-collapse:collapse; font-size:13px;">
+          <thead>
+            <tr style="text-align:left; color:var(--text2); border-bottom:1px solid var(--border);">
+              <th style="padding:6px;">Código</th>
+              <th style="padding:6px;">Razón social</th>
+              <th style="padding:6px;">Domicilio</th>
+              <th style="padding:6px; text-align:right;">HL</th>
+            </tr>
+          </thead>
+          <tbody id="drillDownBody"></tbody>
+        </table>
+      </div>
+    </div>
+
+    <div class="section">
+      <h2>Volumen por marca y canal</h2>
+      <div class="config-row" style="margin-bottom:14px;">
+        <label>Categoría:</label>
+        <select id="catMarcaCanalVolSelect" onchange="loadMarcaCanalVolumen()">
+          <option value="Cervezas">🍺 Cervezas</option>
+          <option value="Aguas">💧 Aguas</option>
+          <option value="Vinos">🍷 Vinos</option>
+          <option value="Sidras">🍎 Sidras</option>
+        </select>
+        <button onclick="exportarMarcaCanalExcel('marcaCanalVolTable', 'volumen_por_marca_y_canal')" style="background:var(--bordo); color:#fff; border:none; padding:7px 14px; border-radius:6px; cursor:pointer; font-size:13px;">Exportar a Excel</button>
+      </div>
+      <div style="overflow-x:auto;">
+        <table style="width:100%; border-collapse:collapse; font-size:12px; white-space:nowrap;" id="marcaCanalVolTable">
+          <thead></thead>
+          <tbody><tr><td style="padding:10px;">Elegí "Ver" arriba para cargar.</td></tr></tbody>
+        </table>
+      </div>
+      <p class="note">Hacé clic en una marca para ver el volumen por artículo.</p>
+    </div>
+
+    <div class="section" id="articuloVolDrillSection" style="display:none;">
+      <h2 id="articuloVolDrillTitle">Volumen por artículo</h2>
+      <button onclick="exportarMarcaCanalExcel('articuloVolDrillTable', 'volumen_por_articulo')" style="background:var(--bordo); color:#fff; border:none; padding:7px 14px; border-radius:6px; cursor:pointer; font-size:13px; margin-bottom:12px;">Exportar a Excel</button>
+      <div style="overflow-x:auto;">
+        <table style="width:100%; border-collapse:collapse; font-size:12px; white-space:nowrap;" id="articuloVolDrillTable">
+          <thead></thead>
+          <tbody></tbody>
+        </table>
+      </div>
+    </div>
+
+    </div>
+
+    <div id="tabCompradores" class="hidden">
+
+    <div class="section" id="compradoresSection">
+      <h2>Compradores por categoría</h2>
+      <div id="compradoresArea"><div class="loading">Cargando...</div></div>
+      <p class="note">Hacé clic en una categoría para ver el listado de clientes que compraron.</p>
+    </div>
+
+    <div class="section hidden" id="compradoresDrillSection">
+      <h2 id="compradoresDrillTitle">Clientes</h2>
+      <button onclick="volverCompradores()" style="background:transparent; border:1px solid var(--border); color:var(--text2); padding:7px 14px; border-radius:6px; cursor:pointer; font-size:13px; margin-bottom:12px;">← Volver</button>
+      <div style="overflow-x:auto;">
+        <table style="width:100%; border-collapse:collapse; font-size:13px;">
+          <thead>
+            <tr style="text-align:left; color:var(--text2); border-bottom:1px solid var(--border);">
+              <th style="padding:6px;">Código</th>
+              <th style="padding:6px;">Razón social</th>
+              <th style="padding:6px;">Domicilio</th>
+              <th style="padding:6px; text-align:right;">HL</th>
+            </tr>
+          </thead>
+          <tbody id="compradoresDrillBody"></tbody>
+        </table>
+      </div>
+    </div>
+
+    <div class="section">
+      <h2>Compradores por canal</h2>
+      <div style="overflow-x:auto;">
+        <table style="width:100%; border-collapse:collapse; font-size:12px; white-space:nowrap;" id="canalCompradoresTable">
+          <thead></thead>
+          <tbody><tr><td style="padding:10px;">Cargando...</td></tr></tbody>
+        </table>
+      </div>
+    </div>
+
+    <div class="section">
+      <h2>Top clientes por categoría (todas las marcas)</h2>
+      <div class="config-row" style="margin-bottom:14px;">
+        <label>Categoría:</label>
+        <select id="catTopClientesSelect" onchange="loadTopClientesCategoria()">
+          <option value="Cervezas">🍺 Cervezas</option>
+          <option value="Aguas">💧 Aguas</option>
+          <option value="Vinos">🍷 Vinos</option>
+          <option value="Sidras">🍎 Sidras</option>
+        </select>
+        <label>Cantidad:</label>
+        <select id="limitTopClientesSelect" onchange="loadTopClientesCategoria()">
+          <option value="15">Top 15</option>
+          <option value="20" selected>Top 20</option>
+        </select>
+      </div>
+      <button onclick="exportarTopClientesExcel()" style="background:var(--bordo); color:#fff; border:none; padding:7px 14px; border-radius:6px; cursor:pointer; font-size:13px; margin-bottom:12px;">Exportar a Excel</button>
+      <div style="overflow-x:auto;">
+        <table style="width:100%; border-collapse:collapse; font-size:13px;">
+          <thead>
+            <tr style="text-align:left; color:var(--text2); border-bottom:1px solid var(--border);">
+              <th style="padding:6px;">Código</th>
+              <th style="padding:6px;">Razón social</th>
+              <th style="padding:6px;">Domicilio</th>
+              <th style="padding:6px; text-align:right;">HL</th>
+            </tr>
+          </thead>
+          <tbody id="topClientesBody"><tr><td colspan="4" style="padding:10px;">Elegí "Ver" arriba para cargar.</td></tr></tbody>
+        </table>
+      </div>
+    </div>
+
+    <div class="section">
+      <h2>Compradores por marca y canal</h2>
+      <div class="config-row" style="margin-bottom:14px;">
+        <label>Categoría:</label>
+        <select id="catMarcaCanalCompSelect" onchange="loadMarcaCanalCompradores()">
+          <option value="Cervezas">🍺 Cervezas</option>
+          <option value="Aguas">💧 Aguas</option>
+          <option value="Vinos">🍷 Vinos</option>
+          <option value="Sidras">🍎 Sidras</option>
+        </select>
+        <button onclick="exportarMarcaCanalExcel('marcaCanalCompTable', 'compradores_por_marca_y_canal')" style="background:var(--bordo); color:#fff; border:none; padding:7px 14px; border-radius:6px; cursor:pointer; font-size:13px;">Exportar a Excel</button>
+      </div>
+      <div style="overflow-x:auto;">
+        <table style="width:100%; border-collapse:collapse; font-size:12px; white-space:nowrap;" id="marcaCanalCompTable">
+          <thead></thead>
+          <tbody><tr><td style="padding:10px;">Elegí "Ver" arriba para cargar.</td></tr></tbody>
+        </table>
+      </div>
+      <p class="note">Hacé clic en una marca para ver los compradores por artículo.</p>
+    </div>
+
+    <div class="section" id="articuloCompDrillSection" style="display:none;">
+      <h2 id="articuloCompDrillTitle">Compradores por artículo</h2>
+      <button onclick="exportarMarcaCanalExcel('articuloCompDrillTable', 'compradores_por_articulo')" style="background:var(--bordo); color:#fff; border:none; padding:7px 14px; border-radius:6px; cursor:pointer; font-size:13px; margin-bottom:12px;">Exportar a Excel</button>
+      <div style="overflow-x:auto;">
+        <table style="width:100%; border-collapse:collapse; font-size:12px; white-space:nowrap;" id="articuloCompDrillTable">
+          <thead></thead>
+          <tbody></tbody>
+        </table>
+      </div>
+    </div>
+
+    </div>
+
+  <div id="tabConfig" class="hidden">
+
+    <div class="section" id="uploadVentasSection">
+      <h2>Actualizar archivo de ventas del día <span id="ultimaActualizacionVentas" style="font-size:12px; font-weight:400; color:var(--text2);"></span></h2>
+      <div class="config-row">
+        <input type="file" id="fileVentasHoy" accept=".xlsx,.xls" style="background:var(--card2); color:var(--text); border:1px solid var(--border); padding:8px; border-radius:6px;">
+        <button onclick="procesarVentasHoy()">Procesar y subir</button>
+      </div>
+      <div id="uploadVentasMsg" class="msg"></div>
+      <p class="note">El archivo debe tener las columnas: Descripción DIVISION, Descripción MARCA, Cliente, Descripcion Vendedor, Descripcion Supervisor, Impositivo, UM Total, Anulado, Fecha Comprobante, Descripcion Transporte, Descripcion de Articulo, Descripcion Canal MKT. Admite .xlsx (si el archivo es .xlsb, abrilo en Excel y "Guardar como" .xlsx primero). Admite archivos grandes: se procesa en el servidor.</p>
+    </div>
+
+    <div class="section" id="adminUniversoSection" style="display:none;">
+      <h2>Actualizar clientes (universo) (solo admin)</h2>
+      <div class="config-row">
+        <input type="file" id="fileUniverso" accept=".xlsx,.xls" style="background:var(--card2); color:var(--text); border:1px solid var(--border); padding:8px; border-radius:6px;">
+        <button onclick="procesarUniverso()">Actualizar</button>
+      </div>
+      <div id="universoMsg" class="msg"></div>
+      <p class="note">El archivo debe tener las columnas Cliente, Razon social, Domicilio, "Fuerza de venta 1 Descripcion personal comercial" y "Fuerza de venta 1 Dias de visita". Se usa para agregar clientes nuevos y actualizar los existentes (código, razón social, domicilio, vendedor y día de visita) en la app de vendedores. Los clientes que no aparezcan en el archivo no se borran.</p>
+    </div>
+
+    <div class="section" id="adminSupRefSection" style="display:none;">
+      <h2>Actualizar mapeo Vendedor-Supervisor (solo admin)</h2>
+      <div class="config-row">
+        <input type="file" id="fileSupRef" accept=".xlsx,.xls" style="background:var(--card2); color:var(--text); border:1px solid var(--border); padding:8px; border-radius:6px;">
+        <button onclick="procesarSupRef()">Actualizar</button>
+      </div>
+      <div id="supRefMsg" class="msg"></div>
+      <p class="note">El archivo debe tener las columnas VENDEDOR y SUPERVISOR. Esto se usa para asignarle el supervisor correcto a cada venta cuando se sube el archivo de ventas del día.</p>
+    </div>
+
+    <div class="section" id="adminConfigSection" style="display:none;">
+      <h2>Configuración (solo admin)</h2>
+      <div class="config-row">
+        <label>Días de venta configurados (objetivo del mes):</label>
+        <input id="diasConfigInput" type="number" min="1" max="31">
+        <button onclick="saveDiasConfig()">Guardar</button>
+      </div>
+      <div id="diasConfigMsg" class="msg"></div>
+      <p class="note">Este número se usa para calcular la venta proyectada de todas las categorías. Se guarda una sola vez y queda disponible para todos.</p>
+    </div>
+
+    <div class="section" id="cambiarPassSection">
+      <h2>Cambiar mi contraseña</h2>
+      <div class="config-row">
+        <input id="passActual" type="password" placeholder="Contraseña actual">
+        <input id="passNueva" type="password" placeholder="Contraseña nueva">
+        <button onclick="cambiarMiPassword()">Cambiar</button>
+      </div>
+      <div id="cambiarPassMsg" class="msg"></div>
+    </div>
+
+    <div class="section" id="adminUsersSection" style="display:none;">
+      <h2>Usuarios (solo admin)</h2>
+      <div style="overflow-x:auto;">
+        <table style="width:100%; border-collapse:collapse; font-size:13px;">
+          <thead>
+            <tr style="text-align:left; color:var(--text2); border-bottom:1px solid var(--border);">
+              <th style="padding:6px;">Usuario</th>
+              <th style="padding:6px;">Rol</th>
+              <th style="padding:6px;"></th>
+            </tr>
+          </thead>
+          <tbody id="usersBody"><tr><td colspan="3" style="padding:10px;">Cargando...</td></tr></tbody>
+        </table>
+      </div>
+      <div class="config-row" style="margin-top:14px;">
+        <input id="nuevoUserUsername" type="text" placeholder="Usuario">
+        <input id="nuevoUserPassword" type="text" placeholder="Contraseña">
+        <select id="nuevoUserRole">
+          <option value="supervisor">Supervisor</option>
+          <option value="admin">Administrador</option>
+          <option value="vendedor">Vendedor</option>
+        </select>
+        <button onclick="crearUsuario()">Crear usuario</button>
+      </div>
+      <div id="usersMsg" class="msg"></div>
+      <p class="note">Los usuarios "Administrador" ven y configuran todo. Los "Supervisor" solo pueden entrar a Configuración para subir el archivo de venta del día y cambiar su propia contraseña. "Vendedor" es para la futura app de vendedores.</p>
+    </div>
+
+  </div>
+
+  </div>
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+<script>
+const API = ''; // mismo origen (se sirve desde el mismo sitio)
+let TOKEN = null, ROLE = null, USERNAME = null;
+
+function showMsg(elId, text, ok){
+  const el = document.getElementById(elId);
+  el.textContent = text;
+  el.className = 'msg ' + (ok ? 'ok' : 'err');
 }
-function readBody(req) {
-  return new Promise((resolve, reject) => {
-    let chunks = [];
-    let size = 0;
-    req.on('data', (c) => {
-      size += c.length;
-      if (size > 200 * 1024 * 1024) {
-        reject(new Error('Body demasiado grande'));
-        req.destroy();
-        return;
-      }
-      chunks.push(c);
+
+async function doLogin(){
+  const username = document.getElementById('loginUser').value.trim();
+  const password = document.getElementById('loginPass').value;
+  if(!username || !password){ showMsg('loginMsg', 'Completa usuario y contraseña', false); return; }
+  try{
+    const res = await fetch(API + '/api/login', {
+      method: 'POST', headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({username, password})
     });
-    req.on('end', () => resolve(Buffer.concat(chunks)));
-    req.on('error', reject);
-  });
-}
-function getAuth(req) {
-  const h = req.headers['authorization'] || '';
-  const token = h.startsWith('Bearer ') ? h.slice(7) : null;
-  return authLib.getSession(token);
-}
-function requireAuth(req, res, roles) {
-  const session = getAuth(req);
-  if (!session) {
-    sendJson(res, 401, { error: 'No autenticado' });
-    return null;
+    const data = await res.json();
+    if(!res.ok){ showMsg('loginMsg', data.error || 'Error de login', false); return; }
+    if(!['admin','supervisor'].includes(data.role)){
+      showMsg('loginMsg', 'Este usuario no tiene acceso al visor comercial', false); return;
+    }
+    TOKEN = data.token; ROLE = data.role; USERNAME = data.username;
+    document.getElementById('loginScreen').classList.add('hidden');
+    document.getElementById('mainScreen').classList.remove('hidden');
+    document.getElementById('userLabel').textContent = USERNAME + ' (' + ROLE + ')';
+    // El supervisor ve todo el dashboard (Volumen, Compradores) y en
+    // Configuracion solo puede subir el archivo de venta del dia y cambiar
+    // su propia contraseña. Las secciones de universo de clientes, mapeo
+    // Vendedor-Supervisor, configuracion de dias y usuarios son solo para
+    // admin - se fija el display en los DOS sentidos (block Y none) en cada
+    // login, no solo "block si admin", porque esta es una SPA: si antes en
+    // la misma pestaña habia una sesion de admin y despues se loguea otro
+    // usuario sin recargar la pagina, sin el "else" estas secciones (y sus
+    // mensajes de exito/error) quedaban pegadas de la sesion anterior.
+    const esAdmin = ROLE === 'admin';
+    document.getElementById('adminConfigSection').style.display = esAdmin ? 'block' : 'none';
+    document.getElementById('adminUniversoSection').style.display = esAdmin ? 'block' : 'none';
+    document.getElementById('adminSupRefSection').style.display = esAdmin ? 'block' : 'none';
+    document.getElementById('adminUsersSection').style.display = esAdmin ? 'block' : 'none';
+    // Limpia mensajes de exito/error que hayan quedado de una sesion previa
+    // en la misma pestaña (mismo motivo que arriba).
+    document.querySelectorAll('.msg').forEach(el => { el.textContent = ''; el.className = 'msg'; });
+    showTab('volumen');
+    await initPeriodoYKpis();
+    loadFiltrosOpciones();
+    if(ROLE === 'admin'){ loadDiasConfig(); loadUsuarios(); }
+  }catch(e){
+    showMsg('loginMsg', 'No se pudo conectar al servidor: ' + e.message, false);
   }
-  if (roles && !roles.includes(session.role)) {
-    sendJson(res, 403, { error: 'No autorizado' });
-    return null;
-  }
-  return session;
 }
-const routes = [];
-function route(method, pattern, handler) {
-  routes.push({ method, pattern, handler });
+
+function showTab(tab){
+  document.getElementById('periodoFiltrosWrap').classList.toggle('hidden', tab === 'config');
+  document.getElementById('tabVolumen').classList.toggle('hidden', tab !== 'volumen');
+  document.getElementById('tabCompradores').classList.toggle('hidden', tab !== 'compradores');
+  document.getElementById('tabConfig').classList.toggle('hidden', tab !== 'config');
+  document.getElementById('tabBtnVolumen').style.background = tab === 'volumen' ? 'rgba(255,255,255,.15)' : 'transparent';
+  document.getElementById('tabBtnCompradores').style.background = tab === 'compradores' ? 'rgba(255,255,255,.15)' : 'transparent';
+  document.getElementById('tabBtnConfig').style.background = tab === 'config' ? 'rgba(255,255,255,.15)' : 'transparent';
 }
-function matchRoute(method, pathname) {
-  for (const r of routes) {
-    if (r.method !== method) continue;
-    const parts = r.pattern.split('/').filter(Boolean);
-    const pparts = pathname.split('/').filter(Boolean);
-    if (parts.length !== pparts.length) continue;
-    const params = {};
-    let ok = true;
-    for (let i = 0; i < parts.length; i++) {
-      if (parts[i].startsWith(':')) {
-        params[parts[i].slice(1)] = decodeURIComponent(pparts[i]);
-      } else if (parts[i] !== pparts[i]) {
-        ok = false; break;
+
+function doLogout(){
+  TOKEN = null; ROLE = null;
+  document.getElementById('mainScreen').classList.add('hidden');
+  document.getElementById('loginScreen').classList.remove('hidden');
+  document.getElementById('loginPass').value = '';
+}
+
+function authHeaders(){
+  return {'Authorization': 'Bearer ' + TOKEN};
+}
+
+// El selector de periodo (multi-select "filtroMeses") muestra cada opcion
+// como par mes+año ("Noviembre 2025", value "2025-11"), no solo el mes -
+// esto permite armar rangos que crucen el fin de año (ej. Nov 2025 a Jun
+// 2026). Las opciones disponibles son las que realmente tienen datos
+// cargados (via /api/periodos-disponibles), asi que el usuario nunca puede
+// elegir un periodo sin datos.
+function periodoKey(anio, mes){ return anio + '-' + String(mes).padStart(2, '0'); }
+
+async function initPeriodoYKpis(){
+  try{
+    const [metaRes, periodosRes] = await Promise.all([
+      fetch(API + '/api/meta', {headers: authHeaders()}),
+      fetch(API + '/api/periodos-disponibles', {headers: authHeaders()}),
+    ]);
+    const meta = await metaRes.json();
+    const periodosDisponibles = periodosRes.ok ? await periodosRes.json() : [];
+    const mesNum = Number(meta.mes_actual_num) || (new Date().getMonth()+1);
+    const anioNum = Number(meta.anio_actual_num) || new Date().getFullYear();
+    DEFAULT_PERIODO = periodoKey(anioNum, mesNum);
+
+    let valores = (periodosDisponibles || []).map(p => periodoKey(p.anio, p.mes));
+    if(!valores.includes(DEFAULT_PERIODO)) valores.push(DEFAULT_PERIODO);
+    valores = Array.from(new Set(valores)).sort();
+    const labelsPeriodos = {};
+    for(const v of valores){
+      const [a, m] = v.split('-').map(Number);
+      labelsPeriodos[v] = NOMBRES_MES[m] + ' ' + a;
+    }
+    fillMs('filtroMeses', valores, labelsPeriodos);
+    // Solo se preselecciona el periodo actual si todavia no hay ninguno
+    // marcado (para no pisar la seleccion del usuario si initPeriodoYKpis se
+    // vuelve a llamar, ej. despues de subir el archivo de venta del dia).
+    if(!MS_STATE['filtroMeses'] || MS_STATE['filtroMeses'].size === 0){
+      MS_STATE['filtroMeses'] = new Set([DEFAULT_PERIODO]);
+      renderMsPanel('filtroMeses');
+      updateMsButton('filtroMeses');
+    }
+    document.getElementById('periodoNote').textContent = meta.mes_actual ? ('Último dato cargado: ' + meta.mes_actual) : '';
+    const ultimaActEl = document.getElementById('ultimaActualizacionVentas');
+    if(ultimaActEl){
+      if(meta.last_upload){
+        const d = new Date(meta.last_upload);
+        ultimaActEl.textContent = '· Última actualización: ' + d.toLocaleString('es-AR', {day:'2-digit', month:'2-digit', year:'numeric', hour:'2-digit', minute:'2-digit'});
+      } else {
+        ultimaActEl.textContent = '';
       }
     }
-    if (ok) return { handler: r.handler, params };
+    await loadKpis();
+  }catch(e){
+    document.getElementById('kpiArea').innerHTML = '<div class="loading">Error cargando periodo: ' + e.message + '</div>';
   }
-  return null;
 }
-route('POST', '/api/login', async (req, res) => {
-  const body = JSON.parse((await readBody(req)).toString('utf-8') || '{}');
-  const result = authLib.login(body.username || '', body.password || '');
-  if (!result) return sendJson(res, 401, { error: 'Usuario o contraseña incorrectos' });
-  sendJson(res, 200, result);
-});
-route('POST', '/api/logout', async (req, res) => {
-  const h = req.headers['authorization'] || '';
-  const token = h.startsWith('Bearer ') ? h.slice(7) : null;
-  if (token) authLib.logout(token);
-  sendJson(res, 200, { ok: true });
-});
-route('GET', '/api/vendedores', async (req, res) => {
-  if (!requireAuth(req, res, ['admin', 'supervisor', 'vendedor'])) return;
-  const rows = db.prepare(`
-    SELECT DISTINCT personal_comercial FROM clientes
-    WHERE personal_comercial IS NOT NULL AND personal_comercial != ''
-    ORDER BY personal_comercial
-  `).all();
-  sendJson(res, 200, rows.map(r => r.personal_comercial));
-});
-route('GET', '/api/dias', async (req, res) => {
-  if (!requireAuth(req, res, ['admin', 'supervisor', 'vendedor'])) return;
-  const parsed = url.parse(req.url, true);
-  const vendedor = parsed.query.vendedor || '';
-  const rows = db.prepare(`
-    SELECT DISTINCT dias_visita FROM clientes
-    WHERE personal_comercial = ? AND dias_visita IS NOT NULL AND dias_visita != ''
-    ORDER BY dias_visita
-  `).all(vendedor);
-  sendJson(res, 200, rows.map(r => r.dias_visita));
-});
-// La app de vendedores siempre muestra el "mes en curso" (el ultimo periodo
-// cargado via upload, guardado en meta.mes_actual_num/anio_actual_num) - no
-// el historico completo de ventas. Si todavia no se cargo ningun archivo no
-// hay periodo definido y se muestra todo (comportamiento anterior).
-function getPeriodoActual() {
-  const mesRow = db.prepare('SELECT value FROM meta WHERE key = ?').get('mes_actual_num');
-  const anioRow = db.prepare('SELECT value FROM meta WHERE key = ?').get('anio_actual_num');
-  return {
-    mes: mesRow ? Number(mesRow.value) : null,
-    anio: anioRow ? Number(anioRow.value) : null,
-  };
+
+const NOMBRES_MES = ['','Enero','Febrero','Marzo','Abril','Mayo','Junio','Julio','Agosto','Septiembre','Octubre','Noviembre','Diciembre'];
+const ICONOS_CAT = { 'Cervezas':'🍺', 'Aguas':'💧', 'Vinos':'🍷', 'Sidras':'🍎' };
+function catLabel(cat){ return (ICONOS_CAT[cat] ? ICONOS_CAT[cat] + ' ' : '') + cat; }
+
+async function loadKpis(){
+  const periodos = getMsValues('filtroMeses').sort(); // "YYYY-MM": el orden alfabetico ya es cronologico
+  if(!periodos.length){ return; }
+  CURRENT_PERIODOS = periodos;
+  document.getElementById('kpiArea').innerHTML = '<div class="loading">Cargando datos...</div>';
+  try{
+    const res = await fetch(API + `/api/kpis?${periodoQueryString()}${filtrosQueryString()}`, {headers: authHeaders()});
+    const data = await res.json();
+    if(!res.ok){ document.getElementById('kpiArea').innerHTML = '<div class="loading">' + (data.error||'Error') + '</div>'; return; }
+    renderKpis(data);
+    loadRankingMarcas();
+    loadCompradores();
+    loadTopClientesCategoria();
+    loadCanalVolumen();
+    loadCanalCompradores();
+    loadMarcaCanalVolumen();
+    loadMarcaCanalCompradores();
+  }catch(e){
+    document.getElementById('kpiArea').innerHTML = '<div class="loading">Error: ' + e.message + '</div>';
+  }
 }
-function periodoClauseFor(alias, mes, anio) {
-  if (!mes || !anio) return '';
-  const col = alias ? alias + '.' : '';
-  return ` AND ${col}mes = ? AND ${col}anio = ?`;
+
+function fmtHL(n){
+  if(n === null || n === undefined) return '-';
+  return n.toLocaleString('es-AR', {minimumFractionDigits:2, maximumFractionDigits:2}) + ' HL';
 }
-// Venta de estos 3 camioneros ("Descripcion Transporte" en el Excel, guardado
-// en ventas.camionero) es venta "por afuera" que no le entra al variable de
-// los vendedores - a pedido del usuario, esa venta tiene que dejar de existir
-// SOLO en la app de vendedores (compradores, HL, cobertura). El dashboard de
-// admin/supervisor (visor.html) sigue mostrando el total real, incluida esta
-// venta - por eso este filtro NO se toca en ninguna ruta de visor.html.
-const CAMIONEROS_EXCLUIDOS_APP = ['DIAZ LEANDRO PABLO', 'MASTROVITO LUIS DIEGO', 'RUIZ LUCAS GONZALO'];
-function camioneroExcluidoClause(alias) {
-  const col = alias ? alias + '.' : '';
-  return ` AND UPPER(TRIM(${col}camionero)) NOT IN (${CAMIONEROS_EXCLUIDOS_APP.map(() => '?').join(',')})`;
+function fmtNum(n){
+  if(n === null || n === undefined) return '-';
+  return n.toLocaleString('es-AR', {minimumFractionDigits:2, maximumFractionDigits:2});
 }
-route('GET', '/api/clientes', async (req, res) => {
-  if (!requireAuth(req, res, ['admin', 'supervisor', 'vendedor'])) return;
-  const parsed = url.parse(req.url, true);
-  const vendedor = parsed.query.vendedor || '';
-  const dia = parsed.query.dia || '';
-  const clientes = db.prepare(`
-    SELECT cliente_id, razon_social, domicilio FROM clientes
-    WHERE personal_comercial = ? AND dias_visita = ?
-    ORDER BY razon_social
-  `).all(vendedor, dia);
-  const { mes, anio } = getPeriodoActual();
-  const periodoClause = periodoClauseFor('v', mes, anio) + camioneroExcluidoClause('v');
-  const periodoParams = (mes && anio) ? [mes, anio, ...CAMIONEROS_EXCLUIDOS_APP] : [...CAMIONEROS_EXCLUIDOS_APP];
-  const CATS = ['Cervezas', 'Aguas', 'Vinos', 'Sidras'];
-  const compradoresPorCat = {};
-  for (const cat of CATS) {
-    const rows = db.prepare(`
-      SELECT DISTINCT v.cliente_id FROM ventas v
-      JOIN clientes c ON c.cliente_id = v.cliente_id
-      WHERE c.personal_comercial = ? AND c.dias_visita = ? AND v.categoria = ?${periodoClause}
-      GROUP BY v.cliente_id HAVING SUM(v.um_hl) >= 0.001
-    `).all(vendedor, dia, cat, ...periodoParams);
-    compradoresPorCat[cat] = rows.length;
+function fmtInt(n){
+  if(n === null || n === undefined) return '-';
+  return n.toLocaleString('es-AR');
+}
+
+// Tabla compartida por "Volumen por canal" y "Compradores por canal": filas =
+// canales, columnas = cada categoria (Actual / mismo mes año pasado / mes
+// pasado) mas una columna Total que suma las categorias. data viene de
+// /api/canal o /api/canal-compradores, con la misma forma en ambos casos.
+function renderCanalTable(tableId, data, fmtFn, unitLabel){
+  const table = document.getElementById(tableId);
+  const CATS = ['Cervezas','Aguas','Vinos','Sidras'];
+  const conMesAnterior = data.mes_anterior_num !== null && data.mes_anterior_num !== undefined;
+  const cols = conMesAnterior ? 3 : 2;
+  const labelActual = 'Actual';
+  const labelAnioAnt = formatPeriodoLabel(periodosAnioAnterior(data.periodos));
+  const labelMesAnt = conMesAnterior ? (NOMBRES_MES[data.mes_anterior_num] + ' ' + data.anio_mes_anterior) : '';
+  const grupos = [...CATS, 'Total'];
+
+  let thead = '<tr><th style="padding:6px; text-align:left; border-bottom:1px solid var(--border);">Canal</th>';
+  for(const g of grupos){
+    thead += `<th colspan="${cols}" style="padding:6px; text-align:center; border-bottom:1px solid var(--border); border-left:1px solid var(--border); color:var(--dorado);">${catLabel(g)}${unitLabel ? ' ('+unitLabel+')' : ''}</th>`;
   }
-  // Categorias compradas por cada cliente (para el dibujito del lado
-  // derecho en el listado principal): una sola consulta agrupada en vez de
-  // una por cliente.
-  const catPorClienteRows = db.prepare(`
-    SELECT v.cliente_id as cliente_id, v.categoria as categoria FROM ventas v
-    JOIN clientes c ON c.cliente_id = v.cliente_id
-    WHERE c.personal_comercial = ? AND c.dias_visita = ?${periodoClause}
-    GROUP BY v.cliente_id, v.categoria HAVING SUM(v.um_hl) >= 0.001
-  `).all(vendedor, dia, ...periodoParams);
-  const catPorCliente = {};
-  for (const r of catPorClienteRows) {
-    if (!catPorCliente[r.cliente_id]) catPorCliente[r.cliente_id] = [];
-    catPorCliente[r.cliente_id].push(r.categoria);
+  thead += '</tr><tr><th style="padding:4px;"></th>';
+  for(let i=0;i<grupos.length;i++){
+    thead += `<th style="padding:4px; text-align:right; border-left:1px solid var(--border); color:var(--text2); font-weight:600;">${labelActual}</th>`;
+    thead += `<th style="padding:4px; text-align:right; color:var(--text2); font-weight:600;">${labelAnioAnt}</th>`;
+    if(conMesAnterior) thead += `<th style="padding:4px; text-align:right; color:var(--text2); font-weight:600;">${labelMesAnt}</th>`;
   }
-  const clientesConCategorias = clientes.map(c => ({
-    cliente_id: c.cliente_id,
-    razon_social: c.razon_social,
-    domicilio: c.domicilio,
-    categorias: catPorCliente[c.cliente_id] || [],
-  }));
-  sendJson(res, 200, {
-    total_clientes: clientes.length,
-    compradores_por_categoria: compradoresPorCat,
-    clientes: clientesConCategorias,
-  });
-});
-route('GET', '/api/clientes/categoria', async (req, res) => {
-  if (!requireAuth(req, res, ['admin', 'supervisor', 'vendedor'])) return;
-  const parsed = url.parse(req.url, true);
-  const vendedor = parsed.query.vendedor || '';
-  const dia = parsed.query.dia || '';
-  const categoria = parsed.query.categoria || '';
-  const { mes, anio } = getPeriodoActual();
-  const periodoClauseV = periodoClauseFor('v', mes, anio) + camioneroExcluidoClause('v');
-  const periodoClausePlain = periodoClauseFor(null, mes, anio) + camioneroExcluidoClause(null);
-  const periodoParams = (mes && anio) ? [mes, anio, ...CAMIONEROS_EXCLUIDOS_APP] : [...CAMIONEROS_EXCLUIDOS_APP];
-  const rows = db.prepare(`
-    SELECT c.cliente_id, c.razon_social, c.domicilio FROM clientes c
-    JOIN ventas v ON v.cliente_id = c.cliente_id
-    WHERE c.personal_comercial = ? AND c.dias_visita = ? AND v.categoria = ?${periodoClauseV}
-    GROUP BY c.cliente_id HAVING SUM(v.um_hl) >= 0.001
-    ORDER BY c.razon_social
-  `).all(vendedor, dia, categoria, ...periodoParams);
-  // Para el dibujito: todas las categorias que compro cada cliente en el
-  // mismo periodo (no solo la que se esta mirando).
-  const catStmt = db.prepare(`
-    SELECT categoria FROM ventas
-    WHERE cliente_id = ?${periodoClausePlain}
-    GROUP BY categoria HAVING SUM(um_hl) >= 0.001
-  `);
-  const out = rows.map(r => ({
-    cliente_id: r.cliente_id,
-    razon_social: r.razon_social,
-    domicilio: r.domicilio,
-    categorias: catStmt.all(r.cliente_id, ...periodoParams).map(x => x.categoria),
-  }));
-  sendJson(res, 200, out);
-});
-route('GET', '/api/cliente/:id', async (req, res, params) => {
-  if (!requireAuth(req, res, ['admin', 'supervisor', 'vendedor'])) return;
-  const cliente = db.prepare('SELECT * FROM clientes WHERE cliente_id = ?').get(params.id);
-  if (!cliente) return sendJson(res, 404, { error: 'Cliente no encontrado' });
-  const { mes, anio } = getPeriodoActual();
-  const periodoClause = periodoClauseFor(null, mes, anio) + camioneroExcluidoClause(null);
-  const periodoParams = (mes && anio) ? [mes, anio, ...CAMIONEROS_EXCLUIDOS_APP] : [...CAMIONEROS_EXCLUIDOS_APP];
-  const CATS = ['Cervezas', 'Aguas', 'Vinos', 'Sidras'];
-  const resultado = {};
-  for (const cat of CATS) {
-    const rows = db.prepare(`
-      SELECT marca, SUM(um_hl) as hl FROM ventas
-      WHERE cliente_id = ? AND categoria = ?${periodoClause}
-      GROUP BY marca HAVING SUM(um_hl) >= 0.001
-      ORDER BY hl DESC
-    `).all(params.id, cat, ...periodoParams);
-    resultado[cat] = rows;
+  thead += '</tr>';
+  table.querySelector('thead').innerHTML = thead;
+
+  function fila(nombre, filaData, negrita){
+    const style = negrita ? 'font-weight:700; border-top:2px solid var(--border);' : 'border-top:1px solid var(--border);';
+    let html = `<tr style="${style}"><td style="padding:6px;">${nombre}</td>`;
+    for(const cat of CATS){
+      const c = filaData.categorias[cat] || {actual:0, anio_anterior:0, mes_anterior:0};
+      html += `<td style="padding:6px; text-align:right; border-left:1px solid var(--border);">${fmtFn(c.actual)}</td>`;
+      html += `<td style="padding:6px; text-align:right; color:var(--text2);">${fmtFn(c.anio_anterior)}</td>`;
+      if(conMesAnterior) html += `<td style="padding:6px; text-align:right; color:var(--text2);">${fmtFn(c.mes_anterior)}</td>`;
+    }
+    const t = filaData.total;
+    html += `<td style="padding:6px; text-align:right; border-left:1px solid var(--border); font-weight:700;">${fmtFn(t.actual)}</td>`;
+    html += `<td style="padding:6px; text-align:right; color:var(--text2); font-weight:700;">${fmtFn(t.anio_anterior)}</td>`;
+    if(conMesAnterior) html += `<td style="padding:6px; text-align:right; color:var(--text2); font-weight:700;">${fmtFn(t.mes_anterior)}</td>`;
+    html += '</tr>';
+    return html;
   }
-  sendJson(res, 200, { cliente, compras: resultado });
-});
-route('GET', '/api/cliente/:id/marca/:marca', async (req, res, params) => {
-  if (!requireAuth(req, res, ['admin', 'supervisor', 'vendedor'])) return;
-  const { mes, anio } = getPeriodoActual();
-  const periodoClause = periodoClauseFor(null, mes, anio) + camioneroExcluidoClause(null);
-  const periodoParams = (mes && anio) ? [mes, anio, ...CAMIONEROS_EXCLUIDOS_APP] : [...CAMIONEROS_EXCLUIDOS_APP];
-  const rows = db.prepare(`
-    SELECT articulo, SUM(um_hl) as hl FROM ventas
-    WHERE cliente_id = ? AND marca = ?${periodoClause}
-    GROUP BY articulo HAVING SUM(um_hl) >= 0.001
-    ORDER BY hl DESC
-  `).all(params.id, params.marca, ...periodoParams);
-  sendJson(res, 200, rows);
-});
-function guardarVentas({ clientes, ventas, mes_actual, mes, anio, dias_venta_reales }) {
-  if (!Array.isArray(clientes) || !Array.isArray(ventas)) {
-    throw new Error('Formato invalido: se esperaba {clientes:[], ventas:[]}');
+
+  let tbody = '';
+  if(!data.filas.length){
+    tbody = `<tr><td colspan="${1 + grupos.length*cols}" style="padding:10px;">Sin datos para este período.</td></tr>`;
+  } else {
+    for(const f of data.filas) tbody += fila(f.canal, f, false);
+    tbody += fila('Total general', data.total_general, true);
   }
-  db.exec('BEGIN');
-  try {
-    if (mes && anio) {
-      db.prepare('DELETE FROM ventas WHERE mes = ? AND anio = ?').run(Number(mes), Number(anio));
+  table.querySelector('tbody').innerHTML = tbody;
+}
+
+async function loadCanalVolumen(){
+  if(!CURRENT_PERIODOS.length) return;
+  const table = document.getElementById('canalVolumenTable');
+  table.querySelector('tbody').innerHTML = '<tr><td style="padding:10px;">Cargando...</td></tr>';
+  try{
+    const res = await fetch(API + `/api/canal?${periodoQueryString()}${filtrosQueryString()}`, {headers: authHeaders()});
+    const data = await res.json();
+    if(!res.ok){ table.querySelector('tbody').innerHTML = `<tr><td style="padding:10px;">${data.error||'Error'}</td></tr>`; return; }
+    renderCanalTable('canalVolumenTable', data, fmtNum, 'HL');
+  }catch(e){
+    table.querySelector('tbody').innerHTML = `<tr><td style="padding:10px;">Error: ${e.message}</td></tr>`;
+  }
+}
+
+async function loadCanalCompradores(){
+  if(!CURRENT_PERIODOS.length) return;
+  const table = document.getElementById('canalCompradoresTable');
+  table.querySelector('tbody').innerHTML = '<tr><td style="padding:10px;">Cargando...</td></tr>';
+  try{
+    const res = await fetch(API + `/api/canal-compradores?${periodoQueryString()}${filtrosQueryString()}`, {headers: authHeaders()});
+    const data = await res.json();
+    if(!res.ok){ table.querySelector('tbody').innerHTML = `<tr><td style="padding:10px;">${data.error||'Error'}</td></tr>`; return; }
+    renderCanalTable('canalCompradoresTable', data, fmtInt, 'clientes');
+  }catch(e){
+    table.querySelector('tbody').innerHTML = `<tr><td style="padding:10px;">Error: ${e.message}</td></tr>`;
+  }
+}
+
+// Tabla compartida por "Volumen por marca y canal" y "Compradores por marca y
+// canal": filas = marcas (de UNA categoria elegida con el select), columnas =
+// los canales que hayan aparecido en los datos (dinamico, no hardcodeado).
+function renderMarcaCanalTable(tableId, data, fmtFn, unitLabel, categoria, tipo){
+  const table = document.getElementById(tableId);
+  const conMesAnterior = data.mes_anterior_num !== null && data.mes_anterior_num !== undefined;
+  const cols = conMesAnterior ? 3 : 2;
+  const labelActual = 'Actual';
+  const labelAnioAnt = formatPeriodoLabel(periodosAnioAnterior(data.periodos));
+  const labelMesAnt = conMesAnterior ? (NOMBRES_MES[data.mes_anterior_num] + ' ' + data.anio_mes_anterior) : '';
+  const grupos = [...data.grupos, 'Total'];
+
+  let thead = '<tr><th style="padding:6px; text-align:left; border-bottom:1px solid var(--border);">Marca</th>';
+  for(const g of grupos){
+    thead += `<th colspan="${cols}" style="padding:6px; text-align:center; border-bottom:1px solid var(--border); border-left:1px solid var(--border); color:var(--dorado);">${g}${unitLabel ? ' ('+unitLabel+')' : ''}</th>`;
+  }
+  thead += '</tr><tr><th style="padding:4px;"></th>';
+  for(let i=0;i<grupos.length;i++){
+    thead += `<th style="padding:4px; text-align:right; border-left:1px solid var(--border); color:var(--text2); font-weight:600;">${labelActual}</th>`;
+    thead += `<th style="padding:4px; text-align:right; color:var(--text2); font-weight:600;">${labelAnioAnt}</th>`;
+    if(conMesAnterior) thead += `<th style="padding:4px; text-align:right; color:var(--text2); font-weight:600;">${labelMesAnt}</th>`;
+  }
+  thead += '</tr>';
+  table.querySelector('thead').innerHTML = thead;
+
+  // El nombre de la marca es cliqueable (salvo en la fila "Total general")
+  // para abrir el desglose por artículo de esa marca (loadMarcaArticuloDrill).
+  function fila(nombre, filaData, negrita){
+    const style = negrita ? 'font-weight:700; border-top:2px solid var(--border);' : 'border-top:1px solid var(--border);';
+    const nombreEscapado = nombre.replace(/'/g,"\\'");
+    const nombreCell = negrita
+      ? `<td style="padding:6px;">${nombre}</td>`
+      : `<td style="padding:6px; cursor:pointer; text-decoration:underline dotted;" onclick="loadMarcaArticuloDrill('${categoria.replace(/'/g,"\\'")}', '${nombreEscapado}', '${tipo}')" title="Ver desglose por artículo">${nombre}</td>`;
+    let html = `<tr style="${style}">${nombreCell}`;
+    for(const g of data.grupos){
+      const c = filaData.porGrupo[g] || {actual:0, anio_anterior:0, mes_anterior:0};
+      html += `<td style="padding:6px; text-align:right; border-left:1px solid var(--border);">${fmtFn(c.actual)}</td>`;
+      html += `<td style="padding:6px; text-align:right; color:var(--text2);">${fmtFn(c.anio_anterior)}</td>`;
+      if(conMesAnterior) html += `<td style="padding:6px; text-align:right; color:var(--text2);">${fmtFn(c.mes_anterior)}</td>`;
+    }
+    const t = filaData.total;
+    html += `<td style="padding:6px; text-align:right; border-left:1px solid var(--border); font-weight:700;">${fmtFn(t.actual)}</td>`;
+    html += `<td style="padding:6px; text-align:right; color:var(--text2); font-weight:700;">${fmtFn(t.anio_anterior)}</td>`;
+    if(conMesAnterior) html += `<td style="padding:6px; text-align:right; color:var(--text2); font-weight:700;">${fmtFn(t.mes_anterior)}</td>`;
+    html += '</tr>';
+    return html;
+  }
+
+  let tbody = '';
+  if(!data.filas.length){
+    tbody = `<tr><td colspan="${1 + grupos.length*cols}" style="padding:10px;">Sin datos para esta categoría en este período.</td></tr>`;
+  } else {
+    for(const f of data.filas) tbody += fila(f.nombre, f, false);
+    tbody += fila('Total general', data.total_general, true);
+  }
+  table.querySelector('tbody').innerHTML = tbody;
+}
+
+async function loadMarcaCanalVolumen(){
+  if(!CURRENT_PERIODOS.length) return;
+  const categoria = document.getElementById('catMarcaCanalVolSelect').value;
+  const table = document.getElementById('marcaCanalVolTable');
+  table.querySelector('tbody').innerHTML = '<tr><td style="padding:10px;">Cargando...</td></tr>';
+  try{
+    const res = await fetch(API + `/api/marca-canal?${periodoQueryString()}&categoria=${encodeURIComponent(categoria)}${filtrosQueryString()}`, {headers: authHeaders()});
+    const data = await res.json();
+    if(!res.ok){ table.querySelector('tbody').innerHTML = `<tr><td style="padding:10px;">${data.error||'Error'}</td></tr>`; return; }
+    renderMarcaCanalTable('marcaCanalVolTable', data, fmtNum, 'HL', categoria, 'volumen');
+  }catch(e){
+    table.querySelector('tbody').innerHTML = `<tr><td style="padding:10px;">Error: ${e.message}</td></tr>`;
+  }
+}
+
+async function loadMarcaCanalCompradores(){
+  if(!CURRENT_PERIODOS.length) return;
+  const categoria = document.getElementById('catMarcaCanalCompSelect').value;
+  const table = document.getElementById('marcaCanalCompTable');
+  table.querySelector('tbody').innerHTML = '<tr><td style="padding:10px;">Cargando...</td></tr>';
+  try{
+    const res = await fetch(API + `/api/marca-canal-compradores?${periodoQueryString()}&categoria=${encodeURIComponent(categoria)}${filtrosQueryString()}`, {headers: authHeaders()});
+    const data = await res.json();
+    if(!res.ok){ table.querySelector('tbody').innerHTML = `<tr><td style="padding:10px;">${data.error||'Error'}</td></tr>`; return; }
+    renderMarcaCanalTable('marcaCanalCompTable', data, fmtInt, 'clientes', categoria, 'compradores');
+  }catch(e){
+    table.querySelector('tbody').innerHTML = `<tr><td style="padding:10px;">Error: ${e.message}</td></tr>`;
+  }
+}
+
+function exportarMarcaCanalExcel(tableId, nombreArchivo){
+  const table = document.getElementById(tableId);
+  const hayDatos = table.querySelectorAll('tbody tr td:not([colspan])').length > 0;
+  if(!hayDatos){ alert('No hay datos para exportar.'); return; }
+  const ws = XLSX.utils.table_to_sheet(table);
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, 'Datos');
+  XLSX.writeFile(wb, nombreArchivo + '.xlsx');
+}
+
+// Tabla del desglose de UNA marca por ARTICULO (drill-down desde "Volumen
+// por marca y canal" / "Compradores por marca y canal"). Filas = articulos,
+// una sola columna de grupo (Actual / año anterior / [mes anterior]).
+function renderArticuloTable(tableId, data, fmtFn, unitLabel){
+  const table = document.getElementById(tableId);
+  const conMesAnterior = data.mes_anterior_num !== null && data.mes_anterior_num !== undefined;
+  const labelActual = 'Actual';
+  const labelAnioAnt = formatPeriodoLabel(periodosAnioAnterior(data.periodos));
+  const labelMesAnt = conMesAnterior ? (NOMBRES_MES[data.mes_anterior_num] + ' ' + data.anio_mes_anterior) : '';
+
+  let thead = `<tr><th style="padding:6px; text-align:left; border-bottom:1px solid var(--border);">Artículo</th>`;
+  thead += `<th colspan="${conMesAnterior?3:2}" style="padding:6px; text-align:center; border-bottom:1px solid var(--border); border-left:1px solid var(--border); color:var(--dorado);">${unitLabel||''}</th></tr>`;
+  thead += '<tr><th style="padding:4px;"></th>';
+  thead += `<th style="padding:4px; text-align:right; border-left:1px solid var(--border); color:var(--text2); font-weight:600;">${labelActual}</th>`;
+  thead += `<th style="padding:4px; text-align:right; color:var(--text2); font-weight:600;">${labelAnioAnt}</th>`;
+  if(conMesAnterior) thead += `<th style="padding:4px; text-align:right; color:var(--text2); font-weight:600;">${labelMesAnt}</th>`;
+  thead += '</tr>';
+  table.querySelector('thead').innerHTML = thead;
+
+  function fila(nombre, f, negrita){
+    const style = negrita ? 'font-weight:700; border-top:2px solid var(--border);' : 'border-top:1px solid var(--border);';
+    let html = `<tr style="${style}"><td style="padding:6px;">${nombre}</td>`;
+    html += `<td style="padding:6px; text-align:right; border-left:1px solid var(--border);">${fmtFn(f.actual)}</td>`;
+    html += `<td style="padding:6px; text-align:right; color:var(--text2);">${fmtFn(f.anio_anterior)}</td>`;
+    if(conMesAnterior) html += `<td style="padding:6px; text-align:right; color:var(--text2);">${fmtFn(f.mes_anterior)}</td>`;
+    html += '</tr>';
+    return html;
+  }
+
+  let tbody = '';
+  if(!data.filas.length){
+    tbody = `<tr><td colspan="${conMesAnterior?4:3}" style="padding:10px;">Sin datos para esta marca en este período.</td></tr>`;
+  } else {
+    for(const f of data.filas) tbody += fila(f.nombre, f, false);
+    tbody += fila('Total marca', data.total_general, true);
+  }
+  table.querySelector('tbody').innerHTML = tbody;
+}
+
+// Abre el desglose por articulo de una marca puntual, tanto desde "Volumen
+// por marca y canal" (tipo='volumen') como desde "Compradores por marca y
+// canal" (tipo='compradores'). No oculta la seccion de origen (mismo patron
+// que drillDownSection de Ranking de marcas): solo aparece debajo.
+async function loadMarcaArticuloDrill(categoria, marca, tipo){
+  const esVol = tipo === 'volumen';
+  const sectionId = esVol ? 'articuloVolDrillSection' : 'articuloCompDrillSection';
+  const titleId = esVol ? 'articuloVolDrillTitle' : 'articuloCompDrillTitle';
+  const tableId = esVol ? 'articuloVolDrillTable' : 'articuloCompDrillTable';
+  const endpoint = esVol ? 'marca-articulo' : 'marca-articulo-compradores';
+  const section = document.getElementById(sectionId);
+  document.getElementById(titleId).textContent = `${esVol ? 'Volumen' : 'Compradores'} por artículo - ${marca} (${categoria})`;
+  section.style.display = 'block';
+  const table = document.getElementById(tableId);
+  table.querySelector('tbody').innerHTML = '<tr><td style="padding:10px;">Cargando...</td></tr>';
+  try{
+    const res = await fetch(API + `/api/${endpoint}?${periodoQueryString()}&categoria=${encodeURIComponent(categoria)}&marca=${encodeURIComponent(marca)}${filtrosQueryString()}`, {headers: authHeaders()});
+    const data = await res.json();
+    if(!res.ok){ table.querySelector('tbody').innerHTML = `<tr><td style="padding:10px;">${data.error||'Error'}</td></tr>`; return; }
+    renderArticuloTable(tableId, data, esVol ? fmtNum : fmtInt, esVol ? 'HL' : 'clientes');
+    section.scrollIntoView({behavior:'smooth', block:'nearest'});
+  }catch(e){
+    table.querySelector('tbody').innerHTML = `<tr><td style="padding:10px;">Error: ${e.message}</td></tr>`;
+  }
+}
+
+function renderKpis(data){
+  const area = document.getElementById('kpiArea');
+  const cats = ['Cervezas','Aguas','Vinos','Sidras'];
+  const conMesAnterior = data.mes_anterior_num !== null && data.mes_anterior_num !== undefined;
+  let html = '<div class="kpi-grid">';
+  for(const cat of cats){
+    const k = data.categorias[cat] || {};
+    const varPct = k.variacion_pct;
+    let badgeClass = 'neutral', badgeText = 'Sin dato año anterior';
+    if(varPct !== null && varPct !== undefined){
+      badgeClass = varPct >= 0 ? 'up' : 'down';
+      badgeText = (varPct >= 0 ? '+' : '') + varPct + '% vs ' + formatPeriodoLabel(periodosAnioAnterior(data.periodos));
+    }
+    let filaMesAnterior = '';
+    if(conMesAnterior){
+      const varMesPct = k.variacion_mes_pct;
+      let badgeClassMes = 'neutral', badgeTextMes = 'Sin dato mes anterior';
+      if(varMesPct !== null && varMesPct !== undefined){
+        badgeClassMes = varMesPct >= 0 ? 'up' : 'down';
+        badgeTextMes = (varMesPct >= 0 ? '+' : '') + varMesPct + '% vs mes anterior';
+      }
+      filaMesAnterior = `
+        <div class="kpi-row"><span>${NOMBRES_MES[data.mes_anterior_num]} ${data.anio_mes_anterior}</span><span>${fmtHL(k.mes_anterior)}</span></div>
+        <div class="kpi-row"><span>Variación vs mes anterior</span><span class="badge ${badgeClassMes}">${badgeTextMes}</span></div>
+      `;
+    }
+    html += `
+      <div class="kpi-card">
+        <h3>${catLabel(cat)}</h3>
+        <div class="kpi-main">${fmtHL(k.actual)}</div>
+        <div class="kpi-sub">Acumulado ${formatPeriodoLabel(data.periodos)}</div>
+        <div class="kpi-row"><span>Proyectado</span><span>${k.proyectado !== null ? fmtHL(k.proyectado) : 'Cargar dias configurados'}</span></div>
+        ${filaMesAnterior}
+        <div class="kpi-row"><span>${formatPeriodoLabel(periodosAnioAnterior(data.periodos))}</span><span>${fmtHL(k.anio_anterior)}</span></div>
+        <div class="kpi-row"><span>Variación vs año anterior</span><span class="badge ${badgeClass}">${badgeText}</span></div>
+      </div>
+    `;
+  }
+  html += '</div>';
+  html += `<p class="note">Días de venta transcurridos: ${data.dias_venta_reales ?? '-'} · Días configurados: ${data.dias_configurados ?? '-'}</p>`;
+  area.innerHTML = html;
+
+  // Barra de periodo (compartida entre Volumen y Compradores): dias
+  // trabajados (dias_venta_reales, calculado del archivo subido), dias
+  // configurados (el numero manual que carga el admin, ej 26) y cuantos
+  // faltan = configurados - trabajados. Se actualiza aca (no en
+  // renderKpisCompradores) porque ambos endpoints devuelven los mismos
+  // valores para el mismo periodo, y esta funcion siempre se llama primero.
+  const diasProgresoBar = document.getElementById('diasProgresoBar');
+  if(diasProgresoBar){
+    const trabajados = data.dias_venta_reales;
+    const configurados = data.dias_configurados;
+    if(trabajados !== null && trabajados !== undefined && configurados !== null && configurados !== undefined){
+      document.getElementById('diasProgresoTrabajados').textContent = trabajados;
+      document.getElementById('diasProgresoConfigurados').textContent = configurados;
+      document.getElementById('diasProgresoFaltan').textContent = configurados - trabajados;
+      diasProgresoBar.classList.remove('hidden');
     } else {
-      db.exec('DELETE FROM ventas');
+      diasProgresoBar.classList.add('hidden');
     }
-    const insCliente = db.prepare(`
-      INSERT OR REPLACE INTO clientes (cliente_id, razon_social, domicilio, personal_comercial, dias_visita)
-      VALUES (?,?,?,?,?)
-    `);
-    for (const c of clientes) {
-      insCliente.run(String(c.cliente_id), c.razon_social || '', c.domicilio || '', c.personal_comercial || '', c.dias_visita || '');
-    }
-    const insVenta = db.prepare(`
-      INSERT INTO ventas (cliente_id, categoria, marca, articulo, um_hl, supervisor, camionero, tipo_documento, mes, anio, canal) VALUES (?,?,?,?,?,?,?,?,?,?,?)
-    `);
-    for (const v of ventas) {
-      insVenta.run(String(v.cliente_id), v.categoria, v.marca, v.articulo, Number(v.um_hl) || 0, v.supervisor || null, v.camionero || null, v.tipo_documento || null, v.mes || null, v.anio || null, v.canal || null);
-    }
-    const setMeta = db.prepare('INSERT OR REPLACE INTO meta (key, value) VALUES (?,?)');
-    setMeta.run('mes_actual', mes_actual || '');
-    setMeta.run('last_upload', new Date().toISOString());
-    if (mes && anio) {
-      setMeta.run('mes_actual_num', String(mes));
-      setMeta.run('anio_actual_num', String(anio));
-    }
-    if (mes && anio && dias_venta_reales) {
-      setMeta.run(`dias_reales_${anio}_${String(mes).padStart(2, '0')}`, String(dias_venta_reales));
-    }
-    if (mes && anio) {
-      const periodoActual = anio * 12 + mes;
-      const periodoLimite = periodoActual - 13;
-      const limiteAnio = Math.floor(periodoLimite / 12);
-      const limiteMes = periodoLimite % 12;
-      db.prepare('DELETE FROM ventas WHERE (anio * 12 + mes) <= ?').run(limiteAnio * 12 + limiteMes);
-    }
-    db.exec('COMMIT');
-  } catch (e) {
-    db.exec('ROLLBACK');
-    throw e;
   }
-  return { clientes: clientes.length, ventas: ventas.length };
 }
 
-route('POST', '/api/upload', async (req, res) => {
-  const session = requireAuth(req, res, ['admin', 'supervisor']);
-  if (!session) return;
-  const raw = (await readBody(req)).toString('utf-8');
-  let data;
-  try { data = JSON.parse(raw); } catch (e) { return sendJson(res, 400, { error: 'JSON invalido' }); }
-  let resultado;
-  try {
-    resultado = guardarVentas(data);
-  } catch (e) {
-    return sendJson(res, 500, { error: 'Error guardando datos: ' + e.message });
+let CURRENT_PERIODOS = [], CURRENT_DRILLDOWN = [], DEFAULT_PERIODO = null;
+
+async function loadRankingMarcas(){
+  if(!CURRENT_PERIODOS.length) return;
+  const categoria = document.getElementById('catRankingSelect').value;
+  const area = document.getElementById('rankingArea');
+  area.innerHTML = '<div class="loading">Cargando ranking...</div>';
+  document.getElementById('drillDownSection').style.display = 'none';
+  try{
+    const res = await fetch(API + `/api/ranking/marcas?${periodoQueryString()}&categoria=${encodeURIComponent(categoria)}${filtrosQueryString()}`, {headers: authHeaders()});
+    const rows = await res.json();
+    if(!res.ok){ area.innerHTML = '<div class="loading">' + (rows.error||'Error') + '</div>'; return; }
+    if(!rows.length){ area.innerHTML = '<div class="loading">Sin datos para esta categoría en este período.</div>'; return; }
+    const max = rows[0].hl;
+    let html = '';
+    for(const r of rows){
+      const pct = max > 0 ? (r.hl / max * 100) : 0;
+      html += `
+        <div style="margin-bottom:10px; cursor:pointer;" onclick="loadDrillDown('${categoria}', '${r.marca.replace(/'/g,"\\'")}')">
+          <div style="display:flex; justify-content:space-between; font-size:13px; margin-bottom:3px;">
+            <span>${r.marca}</span><span style="color:var(--text2);">${fmtHL(r.hl)}</span>
+          </div>
+          <div style="background:var(--card2); border-radius:4px; height:10px; overflow:hidden;">
+            <div style="background:var(--dorado); height:100%; width:${pct}%;"></div>
+          </div>
+        </div>
+      `;
+    }
+    html += '<p class="note">Hacé clic en una marca para ver el top 15 de clientes.</p>';
+    area.innerHTML = html;
+  }catch(e){
+    area.innerHTML = '<div class="loading">Error: ' + e.message + '</div>';
   }
-  sendJson(res, 200, { ok: true, clientes: resultado.clientes, ventas: resultado.ventas });
+}
+
+async function loadDrillDown(categoria, marca){
+  const section = document.getElementById('drillDownSection');
+  const body = document.getElementById('drillDownBody');
+  document.getElementById('drillDownTitle').textContent = `Top clientes - ${marca} (${categoria})`;
+  section.style.display = 'block';
+  body.innerHTML = '<tr><td colspan="4" style="padding:10px;">Cargando...</td></tr>';
+  try{
+    const res = await fetch(API + `/api/ranking/clientes?${periodoQueryString()}&categoria=${encodeURIComponent(categoria)}&marca=${encodeURIComponent(marca)}${filtrosQueryString()}`, {headers: authHeaders()});
+    const rows = await res.json();
+    if(!res.ok){ body.innerHTML = '<tr><td colspan="4">' + (rows.error||'Error') + '</td></tr>'; return; }
+    CURRENT_DRILLDOWN = rows;
+    body.innerHTML = rows.map(r => `
+      <tr style="border-bottom:1px solid var(--border);">
+        <td style="padding:6px;">${r.cliente_id}</td>
+        <td style="padding:6px;">${r.razon_social}</td>
+        <td style="padding:6px;">${r.domicilio}</td>
+        <td style="padding:6px; text-align:right;">${fmtHL(r.hl)}</td>
+      </tr>
+    `).join('');
+    section.scrollIntoView({behavior:'smooth', block:'nearest'});
+  }catch(e){
+    body.innerHTML = '<tr><td colspan="4">Error: ' + e.message + '</td></tr>';
+  }
+}
+
+function exportarClientesExcel(){
+  if(!CURRENT_DRILLDOWN.length){ alert('No hay datos para exportar.'); return; }
+  const data = CURRENT_DRILLDOWN.map(r => ({
+    'Código': r.cliente_id, 'Razón social': r.razon_social, 'Domicilio': r.domicilio, 'HL': r.hl,
+  }));
+  const ws = XLSX.utils.json_to_sheet(data);
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, 'Clientes');
+  XLSX.writeFile(wb, 'ranking_clientes.xlsx');
+}
+
+// Lista completa de vendedores (sin filtrar por supervisor) y el mapeo
+// supervisor -> [vendedores de su mesa], que manda el backend en
+// /api/filtros/opciones (calculado desde las ventas reales, no desde la
+// tabla de referencia Vendedor-Supervisor). Se guardan aparte de MS_VALUES
+// porque actualizarOpcionesVendedor() necesita la lista COMPLETA para poder
+// volver a mostrarla cuando se destilda el filtro de Supervisor.
+let VENDEDORES_TODOS = [];
+let VENDEDORES_POR_SUPERVISOR = {};
+
+// Filtra las opciones del boton "Vendedor" segun el/los Supervisor(es)
+// tildados en ese momento: sin supervisor tildado muestra todos los
+// vendedores; con uno o mas tildados, solo los que tienen ventas bajo esos
+// supervisores. fillMs ya se encarga de destildar en "Vendedor" cualquier
+// seleccion previa que deje de estar disponible.
+function actualizarOpcionesVendedor(){
+  const supsSeleccionados = getMsValues('filtroSupervisor');
+  let valores;
+  if(!supsSeleccionados.length){
+    valores = VENDEDORES_TODOS;
+  } else {
+    const permitidos = new Set();
+    for(const sup of supsSeleccionados){
+      (VENDEDORES_POR_SUPERVISOR[sup] || []).forEach(v => permitidos.add(v));
+    }
+    valores = VENDEDORES_TODOS.filter(v => permitidos.has(v));
+  }
+  fillMs('filtroVendedor', valores);
+}
+
+async function loadFiltrosOpciones(){
+  try{
+    const res = await fetch(API + '/api/filtros/opciones', {headers: authHeaders()});
+    const data = await res.json();
+    if(!res.ok) return;
+    VENDEDORES_TODOS = data.vendedores || [];
+    VENDEDORES_POR_SUPERVISOR = data.vendedores_por_supervisor || {};
+    fillMs('filtroSupervisor', data.supervisores);
+    actualizarOpcionesVendedor();
+    fillMs('filtroDia', data.dias);
+    fillMs('filtroCamionero', data.camioneros);
+  }catch(e){}
+}
+
+// Componente de filtro con seleccion multiple (checkboxes en un panel
+// desplegable). MS_STATE guarda, por id de filtro, el Set de valores
+// tildados; MS_VALUES guarda la lista completa de opciones disponibles
+// (para poder reconstruir el panel sin perder la seleccion al recargar).
+// MS_LABELS es opcional: id -> {valor: texto a mostrar}, para filtros donde
+// el valor interno (ej "1"..."12" para meses) no es igual al texto que ve
+// el usuario (ej "Enero"..."Diciembre").
+const MS_STATE = {};
+const MS_VALUES = {};
+const MS_LABELS = {};
+
+function fillMs(id, values, labels){
+  MS_VALUES[id] = values || [];
+  if(labels) MS_LABELS[id] = labels;
+  if(!MS_STATE[id]) MS_STATE[id] = new Set();
+  // saca de la seleccion valores que ya no existen mas en la lista
+  MS_STATE[id] = new Set([...MS_STATE[id]].filter(v => values.includes(v)));
+  renderMsPanel(id);
+  updateMsButton(id);
+}
+
+function renderMsPanel(id){
+  const wrap = document.getElementById('ms-' + id);
+  const panel = wrap.querySelector('.ms-panel');
+  const values = MS_VALUES[id] || [];
+  const selected = MS_STATE[id] || new Set();
+  const labels = MS_LABELS[id] || {};
+  if(!values.length){
+    panel.innerHTML = '<div class="ms-empty">Sin opciones disponibles.</div>';
+    return;
+  }
+  let html = '';
+  for(const v of values){
+    const checked = selected.has(v) ? 'checked' : '';
+    const vAttr = v.replace(/"/g,'&quot;');
+    html += `<label class="ms-option"><input type="checkbox" value="${vAttr}" ${checked} onchange="onMsCheck('${id}', this)"> ${labels[v] || v}</label>`;
+  }
+  html += `<div class="ms-actions"><a onclick="msSelectAll('${id}')">Todos</a><a onclick="msClear('${id}')">Ninguno</a></div>`;
+  panel.innerHTML = html;
+}
+
+// El filtro de meses ("filtroMeses") no puede quedar vacio (a diferencia de
+// Supervisor/Vendedor/Dia/Camionero, donde vacio significa "todos" y el
+// backend no exige el parametro): /api/kpis y el resto de los endpoints de
+// periodo necesitan al menos un periodo. Si una accion deja la seleccion
+// vacia, se vuelve a marcar DEFAULT_PERIODO (el mes actual segun el ultimo
+// archivo subido) en vez de dejarla en blanco.
+function ensureMesesNoVacio(id){
+  if(id !== 'filtroMeses') return;
+  if(MS_STATE[id].size === 0 && DEFAULT_PERIODO){
+    MS_STATE[id].add(DEFAULT_PERIODO);
+    renderMsPanel(id);
+  }
+}
+
+function onMsCheck(id, input){
+  if(!MS_STATE[id]) MS_STATE[id] = new Set();
+  if(input.checked) MS_STATE[id].add(input.value);
+  else MS_STATE[id].delete(input.value);
+  ensureMesesNoVacio(id);
+  if(id === 'filtroSupervisor') actualizarOpcionesVendedor();
+  updateMsButton(id);
+  loadKpis();
+}
+
+function msSelectAll(id){
+  MS_STATE[id] = new Set(MS_VALUES[id] || []);
+  renderMsPanel(id);
+  if(id === 'filtroSupervisor') actualizarOpcionesVendedor();
+  updateMsButton(id);
+  loadKpis();
+}
+
+function msClear(id){
+  MS_STATE[id] = new Set();
+  ensureMesesNoVacio(id);
+  renderMsPanel(id);
+  if(id === 'filtroSupervisor') actualizarOpcionesVendedor();
+  updateMsButton(id);
+  loadKpis();
+}
+
+// Cuando queda exactamente UNA opcion tildada y el filtro tiene labels (hoy
+// solo "filtroMeses"), el boton muestra directamente ese texto (ej
+// "Septiembre 2026") en vez de "(1)" - es mas claro que el numero. Con 0 o 2+
+// opciones se mantiene el formato de siempre.
+function updateMsButton(id){
+  const wrap = document.getElementById('ms-' + id);
+  const btn = wrap.querySelector('.ms-btn');
+  const label = wrap.dataset.label;
+  const state = MS_STATE[id] || new Set();
+  const n = state.size;
+  if(n === 0){ btn.textContent = `${label} (todos)`; btn.classList.remove('activo'); return; }
+  if(n === 1 && MS_LABELS[id]){
+    const v = [...state][0];
+    btn.textContent = MS_LABELS[id][v] || `${label} (1)`;
+    btn.classList.add('activo');
+    return;
+  }
+  btn.textContent = `${label} (${n})`;
+  btn.classList.add('activo');
+}
+
+function toggleMs(id){
+  document.querySelectorAll('.ms-panel').forEach(p => {
+    if(p !== document.querySelector('#ms-' + id + ' .ms-panel')) p.classList.add('hidden');
+  });
+  document.querySelector('#ms-' + id + ' .ms-panel').classList.toggle('hidden');
+}
+
+document.addEventListener('click', (e) => {
+  if(!e.target.closest('.ms')) document.querySelectorAll('.ms-panel').forEach(p => p.classList.add('hidden'));
 });
 
-const CAT_MAP_SERVIDOR = { 'CERVEZA': 'Cervezas', 'AGUA': 'Aguas', 'VINOS': 'Vinos', 'SIDRAS': 'Sidras' };
-const normNameServidor = s => (s || '').toString().toUpperCase().trim().split(/\s+/).sort().join(' ');
-
-function excelSerialToDate(n) {
-  return new Date(Math.round((n - 25569) * 86400 * 1000));
-}
-// Logica de agregacion compartida entre procesarExcelYGuardar (SheetJS, en
-// memoria - usado por /api/upload-excel directo) y
-// procesarExcelYGuardarStreaming (exceljs streaming - usado por
-// /api/upload-excel/finish, ver mas abajo por que). agregarFilaVenta recibe
-// los valores crudos de UNA fila y los acumula; finalizarYGuardar cierra el
-// proceso.
-function nuevoAcumuladorVentas() {
-  const supRefRow = db.prepare('SELECT value FROM meta WHERE key = ?').get('sup_ref_json');
-  let supRef = {};
-  if (supRefRow) { try { supRef = JSON.parse(supRefRow.value); } catch (e) { supRef = {}; } }
-  return {
-    supRef,
-    FALLBACK: 'SIN ASIGNAR (no en tabla de referencia)',
-    vendAppAgg: new Map(),
-    ventaDepositoVend: new Set(),
-    fechaSet: new Set(),
-    mesCount: {},
-  };
-}
-function fechaAStr(d) {
-  return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
-}
-function agregarFilaVenta(acc, f) {
-  const cat = CAT_MAP_SERVIDOR[f.division];
-  if (!cat) return;
-  if (f.anulado && f.anulado !== 'NO') return;
-  const vendedor = f.vendedor || 'SIN VENDEDOR';
-  const marca = f.marca || 'SIN MARCA';
-  const um = f.um || 0;
-  const fiscal = f.impositivo === 'SI' ? 1 : 0;
-  const transp = f.transporte || 'SIN TRANSPORTE';
-  const canal = f.canal || 'SIN CANAL';
-  if (!f.supervisor || String(f.supervisor).trim() === '') acc.ventaDepositoVend.add(vendedor);
-
-  let dstr = null;
-  const fRaw = f.fecha;
-  if (fRaw instanceof Date && !isNaN(fRaw)) dstr = fechaAStr(fRaw);
-  else if (typeof fRaw === 'number' && fRaw > 0) dstr = fechaAStr(excelSerialToDate(fRaw));
-  else if (typeof fRaw === 'string' && fRaw.trim()) {
-    // "YYYY-MM-DD": ya viene normalizada (filas extraidas en el navegador)
-    if (/^\d{4}-\d{2}-\d{2}$/.test(fRaw.trim())) dstr = fRaw.trim();
-    else { const p = new Date(fRaw); if (!isNaN(p)) dstr = fechaAStr(p); }
-  }
-  if (dstr) {
-    acc.fechaSet.add(dstr);
-    const mkey = dstr.slice(0, 7);
-    acc.mesCount[mkey] = (acc.mesCount[mkey] || 0) + 1;
-  }
-
-  if (f.cliente !== undefined && f.cliente !== null && f.cliente !== '') {
-    const articulo = f.articulo || 'SIN ARTICULO';
-    const vaKey = f.cliente + '|' + cat + '|' + marca + '|' + articulo + '|' + vendedor + '|' + transp + '|' + fiscal + '|' + canal;
-    acc.vendAppAgg.set(vaKey, (acc.vendAppAgg.get(vaKey) || 0) + um);
-  }
-}
-function finalizarYGuardar(acc) {
-  let mesActual = '', mesNumOut = null, anioNumOut = null;
-  const bestMesEntry = Object.entries(acc.mesCount).sort((a, b) => b[1] - a[1])[0];
-  if (bestMesEntry) {
-    const [y, m] = bestMesEntry[0].split('-').map(Number);
-    const NOMBRES = ['Enero', 'Febrero', 'Marzo', 'Abril', 'Mayo', 'Junio', 'Julio', 'Agosto', 'Septiembre', 'Octubre', 'Noviembre', 'Diciembre'];
-    mesActual = NOMBRES[m - 1] + ' ' + y;
-    mesNumOut = m; anioNumOut = y;
-  }
-
-  const ventas = [];
-  for (const [vaKey, um] of acc.vendAppAgg.entries()) {
-    if (um < 0.001) continue;
-    const [cliente_id, categoria, marca, articulo, vendedor, camionero, fiscalStr, canal] = vaKey.split('|');
-    let supervisor;
-    if (acc.ventaDepositoVend.has(vendedor)) supervisor = 'VENTA DEPOSITO';
-    else supervisor = acc.supRef[normNameServidor(vendedor)] || acc.FALLBACK;
-    ventas.push({
-      cliente_id, categoria, marca, articulo,
-      um_hl: Math.round(um * 1000) / 1000,
-      supervisor, camionero, canal,
-      tipo_documento: fiscalStr === '1' ? 'FISCAL' : 'NO FISCAL',
-      mes: mesNumOut, anio: anioNumOut,
-    });
-  }
-
-  let resultado;
-  try {
-    resultado = guardarVentas({ clientes: [], ventas, mes_actual: mesActual, mes: mesNumOut, anio: anioNumOut, dias_venta_reales: acc.fechaSet.size });
-  } catch (e) {
-    throw { status: 500, error: 'Error guardando datos: ' + e.message };
-  }
-  return { ok: true, mes_actual: mesActual, ventas: resultado.ventas };
+function getMsValues(id){
+  return Array.from(MS_STATE[id] || []);
 }
 
-// Nota sobre memoria: el archivo de ventas tiene ~260 columnas pero solo se
-// necesitan ~12. Se lee directo de la estructura densa de la libreria
-// (ws['!data']) y solo se toman los valores de las columnas que hacen
-// falta, fila por fila, sin duplicar el resto en un array aparte.
-function procesarExcelYGuardar(buffer) {
-  let wb;
-  try {
-    wb = XLSX.read(buffer, { type: 'buffer', cellDates: true, dense: true });
-  } catch (e) {
-    throw { status: 400, error: 'No se pudo interpretar el archivo Excel: ' + e.message };
-  }
-  const ws = wb.Sheets[wb.SheetNames[0]];
-  if (!ws || !ws['!ref'] || !ws['!data']) throw { status: 400, error: 'El archivo de ventas está vacío o no se pudo leer.' };
-  const range = XLSX.utils.decode_range(ws['!ref']);
-  const data = ws['!data'];
-  function cellVal(r, c) {
-    const row = data[r];
-    const cell = row ? row[c] : undefined;
-    return cell ? cell.v : undefined;
-  }
+function limpiarFiltros(){
+  ['filtroSupervisor','filtroVendedor','filtroDia','filtroCamionero'].forEach(id => {
+    MS_STATE[id] = new Set();
+    renderMsPanel(id);
+    updateMsButton(id);
+  });
+  actualizarOpcionesVendedor();
+  loadKpis();
+}
 
-  const header = [];
-  for (let c = range.s.c; c <= range.e.c; c++) header.push(cellVal(range.s.r, c));
-  // findCol devuelve el numero de columna real (para usar con cellVal), no
-  // la posicion dentro de "header" - por eso se suma range.s.c.
-  function findCol(name) {
-    for (let i = 0; i < header.length; i++) { if (header[i] === name) return i + range.s.c; }
-    return -1;
-  }
-  const idx = {
-    division: findCol('Descripción DIVISION'),
-    marca: findCol('Descripción MARCA'),
-    cliente: findCol('Cliente'),
-    vendedor: findCol('Descripcion Vendedor'),
-    supervisor: findCol('Descripcion Supervisor'),
-    impositivo: findCol('Impositivo'),
-    um: findCol('UM Total'),
-    anulado: findCol('Anulado'),
-  };
-  for (const k in idx) { if (idx[k] < 0) throw { status: 400, error: 'Falta la columna requerida: ' + k }; }
-  const fechaIdx = findCol('Fecha Comprobante');
-  const transpIdx = findCol('Descripcion Transporte');
-  const articuloIdx = findCol('Descripcion de Articulo');
-  const canalIdx = findCol('Descripcion Canal MKT');
+// A diferencia de limpiarFiltros() (que deja Supervisor/Vendedor/Dia/
+// Camionero en "todos"), limpiar el filtro de meses vuelve a dejar
+// seleccionado solo el periodo actual (DEFAULT_PERIODO) - ver comentario en
+// ensureMesesNoVacio.
+function limpiarMeses(){
+  MS_STATE['filtroMeses'] = new Set(DEFAULT_PERIODO ? [DEFAULT_PERIODO] : []);
+  renderMsPanel('filtroMeses');
+  updateMsButton('filtroMeses');
+  loadKpis();
+}
 
-  const acc = nuevoAcumuladorVentas();
-  for (let r = range.s.r + 1; r <= range.e.r; r++) {
-    if (!data[r]) continue;
-    agregarFilaVenta(acc, {
-      division: cellVal(r, idx.division),
-      marca: cellVal(r, idx.marca),
-      cliente: cellVal(r, idx.cliente),
-      vendedor: cellVal(r, idx.vendedor),
-      supervisor: cellVal(r, idx.supervisor),
-      impositivo: cellVal(r, idx.impositivo),
-      um: cellVal(r, idx.um),
-      anulado: cellVal(r, idx.anulado),
-      fecha: fechaIdx >= 0 ? cellVal(r, fechaIdx) : null,
-      transporte: transpIdx >= 0 ? cellVal(r, transpIdx) : null,
-      articulo: articuloIdx >= 0 ? cellVal(r, articuloIdx) : null,
-      canal: canalIdx >= 0 ? cellVal(r, canalIdx) : null,
-    });
+function filtrosQueryString(){
+  let qs = '';
+  const map = { filtroSupervisor:'supervisor', filtroVendedor:'vendedor', filtroDia:'dia', filtroCamionero:'camionero' };
+  for(const id in map){
+    const vals = getMsValues(id);
+    if(vals.length) qs += '&' + map[id] + '=' + encodeURIComponent(vals.join('|'));
   }
-  return finalizarYGuardar(acc);
+  return qs;
+}
+
+// Query string del periodo (pares mes-año seleccionados, ej "2025-11|2026-01")
+// para todos los endpoints que dependen del periodo compartido (Volumen y
+// Compradores).
+function periodoQueryString(){
+  return `periodos=${CURRENT_PERIODOS.join('|')}`;
+}
+
+// Etiqueta legible de un conjunto de periodos (array de {mes, anio}, como
+// los devuelve el backend): un solo periodo muestra el nombre completo
+// ("Septiembre 2026"), 2 o mas muestran un rango abreviado del primero al
+// ultimo periodo seleccionado ("Nov 2025-Jun 2026"), permitiendo que el
+// rango cruce de un año a otro.
+const NOMBRES_MES_ABREV = ['','Ene','Feb','Mar','Abr','May','Jun','Jul','Ago','Sep','Oct','Nov','Dic'];
+function formatPeriodoLabel(periodos){
+  if(!periodos || !periodos.length) return '';
+  if(periodos.length === 1) return NOMBRES_MES[periodos[0].mes] + ' ' + periodos[0].anio;
+  const primero = periodos[0], ultimo = periodos[periodos.length-1];
+  return NOMBRES_MES_ABREV[primero.mes] + ' ' + primero.anio + '-' + NOMBRES_MES_ABREV[ultimo.mes] + ' ' + ultimo.anio;
+}
+// Mismos periodos, un año antes cada uno - para el rotulo de "año anterior".
+function periodosAnioAnterior(periodos){
+  return (periodos || []).map(p => ({ mes: p.mes, anio: p.anio - 1 }));
+}
+
+const CAT_MAP = {'CERVEZA':'Cervezas','AGUA':'Aguas','VINOS':'Vinos','SIDRAS':'Sidras'};
+const normName = s => (s||'').toString().toUpperCase().trim().split(/\s+/).sort().join(' ');
+function readWorkbook(file){
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = e => {
+      try{ resolve(XLSX.read(e.target.result, {type:'array', cellDates:true})); }
+      catch(err){ reject(err); }
+    };
+    reader.onerror = () => reject(new Error('No se pudo leer el archivo'));
+    reader.readAsArrayBuffer(file);
+  });
+}
+function getDenseRows(ws){
+  const rows = XLSX.utils.sheet_to_json(ws, {header:1, raw:true, defval: undefined});
+  if(!Array.isArray(rows)) throw new Error('No se pudo interpretar el contenido de la hoja.');
+  return rows;
+}
+function findColIndex(headerRow, name){
+  if(!Array.isArray(headerRow)) throw new Error('No se encontró la fila de encabezados (fila 1) en el archivo.');
+  for(let i=0;i<headerRow.length;i++){ if(headerRow[i] === name) return i; }
+  return -1;
 }
 
 // El archivo de ventas real pesa 15-25MB con ~260 columnas y hasta ~100.000
-// filas. Se probo primero parsearlo en el navegador con la misma libreria
-// que usa /api/upload-excel (xlsx/SheetJS), quedandose solo con las ~12
-// columnas que hacen falta, para no tener que subir el binario pesado. Pero
-// esa libreria arma el libro ENTERO en memoria antes de devolver nada, y con
-// este volumen terminaba "perdiendo" todas las celdas (el archivo se leia
-// como vacio) - paso tanto con el .xlsb original como con una copia
-// guardada de nuevo en Excel como .xlsx, asi que no era un problema del
-// formato del archivo sino del volumen de datos.
-// La solucion real es parsear en modo streaming: exceljs (WorkbookReader)
-// lee el archivo fila por fila SIN cargar el libro completo en memoria, asi
-// que el tamaño del archivo no importa. Por eso el archivo se vuelve a subir
-// crudo (ver procesarVentasHoy en visor.html) y se parsea aca.
-// exceljs no puede leer .xlsb (formato binario propietario de Microsoft, sin
-// XML adentro) - si el nombre del archivo termina en .xlsb se avisa antes de
-// intentar leerlo para no dar un error confuso.
-const COLUMNAS_VENTAS_REQUERIDAS = ['Descripción DIVISION', 'Descripción MARCA', 'Cliente', 'Descripcion Vendedor', 'Descripcion Supervisor', 'Impositivo', 'UM Total', 'Anulado'];
-const COLUMNAS_VENTAS_OPCIONALES = ['Fecha Comprobante', 'Descripcion Transporte', 'Descripcion de Articulo', 'Descripcion Canal MKT'];
-
-function cellValStreaming(v) {
-  if (v === null || v === undefined) return undefined;
-  if (v instanceof Date) return v;
-  if (typeof v === 'object') {
-    if (Array.isArray(v.richText)) return v.richText.map((rt) => rt.text).join('');
-    if (v.result !== undefined) return v.result;
-    if (v.text !== undefined) return v.text;
-    return undefined;
-  }
-  return v;
-}
-
-async function procesarExcelYGuardarStreaming(filePath, nombreOriginal) {
-  if (nombreOriginal && /\.xlsb$/i.test(nombreOriginal)) {
-    throw { status: 400, error: 'Los archivos .xlsb no se pueden leer directamente. Abrilo en Excel, hace "Archivo > Guardar como > Libro de Excel (.xlsx)" y subi ese archivo.' };
-  }
-
-  const acc = nuevoAcumuladorVentas();
-  const idx = {};
-  let headerLeida = false;
-  let filasLeidas = 0;
-
-  let workbookReader;
-  try {
-    workbookReader = new ExcelJS.stream.xlsx.WorkbookReader(filePath, {});
-    for await (const worksheetReader of workbookReader) {
-      for await (const row of worksheetReader) {
-        const vals = row.values;
-        if (!headerLeida) {
-          headerLeida = true;
-          for (let c = 1; c < vals.length; c++) {
-            const nombre = cellValStreaming(vals[c]);
-            if (COLUMNAS_VENTAS_REQUERIDAS.includes(nombre) || COLUMNAS_VENTAS_OPCIONALES.includes(nombre)) idx[nombre] = c;
-          }
-          for (const nombre of COLUMNAS_VENTAS_REQUERIDAS) {
-            if (idx[nombre] === undefined) throw { status: 400, error: 'Falta la columna requerida: ' + nombre };
-          }
-          continue;
-        }
-        const division = cellValStreaming(vals[idx['Descripción DIVISION']]);
-        if (division === undefined) continue;
-        filasLeidas++;
-        agregarFilaVenta(acc, {
-          division,
-          marca: cellValStreaming(vals[idx['Descripción MARCA']]),
-          cliente: cellValStreaming(vals[idx['Cliente']]),
-          vendedor: cellValStreaming(vals[idx['Descripcion Vendedor']]),
-          supervisor: cellValStreaming(vals[idx['Descripcion Supervisor']]),
-          impositivo: cellValStreaming(vals[idx['Impositivo']]),
-          um: cellValStreaming(vals[idx['UM Total']]),
-          anulado: cellValStreaming(vals[idx['Anulado']]),
-          fecha: idx['Fecha Comprobante'] !== undefined ? cellValStreaming(vals[idx['Fecha Comprobante']]) : null,
-          transporte: idx['Descripcion Transporte'] !== undefined ? cellValStreaming(vals[idx['Descripcion Transporte']]) : null,
-          articulo: idx['Descripcion de Articulo'] !== undefined ? cellValStreaming(vals[idx['Descripcion de Articulo']]) : null,
-          canal: idx['Descripcion Canal MKT'] !== undefined ? cellValStreaming(vals[idx['Descripcion Canal MKT']]) : null,
-        });
-      }
-      break; // solo se procesa la primera hoja
+// filas. Se probo parsearlo en el navegador con esta misma libreria (SheetJS)
+// para no subir el binario pesado, pero SheetJS arma el libro ENTERO en
+// memoria antes de devolver nada, y con este volumen terminaba "perdiendo"
+// todas las celdas (el archivo se leia como vacio) - paso tanto con el
+// .xlsb original como con una copia guardada de nuevo en Excel como .xlsx,
+// asi que no era un problema del formato sino del volumen de datos. Por eso
+// ahora el archivo se sube CRUDO (ver procesarVentasHoy) y se parsea en el
+// servidor con exceljs en modo streaming (lee fila por fila sin cargar el
+// libro entero en memoria).
+async function procesarSupRef(){
+  const file = document.getElementById('fileSupRef').files[0];
+  if(!file){ showMsg('supRefMsg', 'Elegí un archivo', false); return; }
+  showMsg('supRefMsg', 'Leyendo archivo...', true);
+  try{
+    const wb = await readWorkbook(file);
+    const ws = wb.Sheets[wb.SheetNames[0]];
+    const rows = getDenseRows(ws);
+    if(!rows || rows.length < 2) throw new Error('El archivo está vacío o no se pudo leer.');
+    const header = rows[0];
+    const vIdx = findColIndex(header, 'VENDEDOR');
+    const sIdx = findColIndex(header, 'SUPERVISOR');
+    if(vIdx < 0 || sIdx < 0) throw new Error('Faltan las columnas VENDEDOR / SUPERVISOR');
+    const mapping = {};
+    for(let r=1;r<rows.length;r++){
+      const row = rows[r];
+      if(!row || !row[vIdx]) continue;
+      mapping[normName(row[vIdx])] = (row[sIdx]||'SIN SUPERVISOR').toString().trim();
     }
-  } catch (e) {
-    if (e && e.status) throw e;
-    const msg = (e && e.message) ? e.message : String(e);
-    // Bug conocido de exceljs (streaming): a veces, con la lectura por
-    // partes del zip, el bloque que dice cuantas hojas tiene el libro
-    // llega "tarde" y esto tira este error puntual - no es un archivo
-    // realmente corrupto. Suele funcionar si se sube de nuevo.
-    if (/reading '?sheets'?/i.test(msg)) {
-      throw { status: 400, error: 'Error interno al leer el archivo (problema conocido de la librería con archivos grandes). Probá subirlo de nuevo; si vuelve a pasar, avisale a tu desarrollador.' };
-    }
-    throw { status: 400, error: 'No se pudo interpretar el archivo Excel: ' + msg };
-  }
-
-  if (!headerLeida) throw { status: 400, error: 'El archivo está vacío o no se pudo leer (no se encontró ninguna fila).' };
-  if (filasLeidas === 0) throw { status: 400, error: 'El archivo no tiene filas de ventas para las categorías conocidas.' };
-  return finalizarYGuardar(acc);
-}
-
-route('POST', '/api/upload-excel', async (req, res) => {
-  const session = requireAuth(req, res, ['admin', 'supervisor']);
-  if (!session) return;
-  let buffer;
-  try {
-    buffer = await readBody(req);
-  } catch (e) {
-    return sendJson(res, 400, { error: 'No se pudo leer el archivo subido: ' + e.message });
-  }
-  try {
-    const resultado = procesarExcelYGuardar(buffer);
-    sendJson(res, 200, resultado);
-  } catch (e) {
-    sendJson(res, e.status || 500, { error: e.error || e.message || 'Error desconocido' });
-  }
-});
-
-const DATA_DIR = process.env.DB_PATH ? path.dirname(process.env.DB_PATH) : path.join(__dirname, '..', 'data');
-const TMP_DIR = path.join(DATA_DIR, 'tmp_uploads');
-try { fs.mkdirSync(TMP_DIR, { recursive: true }); } catch (e) {}
-
-// Al arrancar el servidor se borra cualquier archivo temporal de una subida
-// de excel que haya quedado a mitad de camino (ej: el servidor se reinicio
-// en medio de una subida, o una subida fallo antes de terminar) - uploadJobs
-// y uploadFilenames son Maps en memoria que se pierden en cada reinicio, asi
-// que cualquier archivo que quede en TMP_DIR ya es basura sin dueño. Si no se
-// limpia, se va acumulando (cada archivo de ventas pesa 15-25MB) hasta llenar
-// el disco - esto es lo que causaba el error "no space left on device".
-try {
-  for (const f of fs.readdirSync(TMP_DIR)) {
-    try { fs.unlinkSync(path.join(TMP_DIR, f)); } catch (e) {}
-  }
-} catch (e) {}
-
-function tmpPathFor(uploadId) {
-  if (!/^[a-f0-9]{32}$/.test(uploadId)) return null;
-  return path.join(TMP_DIR, uploadId + '.bin');
-}
-
-// Jobs de procesamiento en memoria: el archivo puede tardar mas que el timeout
-// del proxy (Render u otro), asi que /finish responde enseguida y el frontend
-// consulta el estado con /status en vez de esperar la respuesta del POST.
-const uploadJobs = new Map();
-// Nombre original del archivo (lo manda el navegador en /start): sirve para
-// avisar temprano si es un .xlsb, que exceljs no puede leer.
-const uploadFilenames = new Map();
-
-route('POST', '/api/upload-excel/start', async (req, res) => {
-  const session = requireAuth(req, res, ['admin', 'supervisor']);
-  if (!session) return;
-  const parsed = url.parse(req.url, true);
-  const filename = (parsed.query.filename || '').toString();
-  if (/\.xlsb$/i.test(filename)) {
-    return sendJson(res, 400, { error: 'Los archivos .xlsb no se pueden leer directamente. Abrilo en Excel, hace "Archivo > Guardar como > Libro de Excel (.xlsx)" y subi ese archivo.' });
-  }
-  const uploadId = crypto.randomBytes(16).toString('hex');
-  const filePath = tmpPathFor(uploadId);
-  fs.writeFileSync(filePath, Buffer.alloc(0));
-  if (filename) uploadFilenames.set(uploadId, filename);
-  sendJson(res, 200, { uploadId });
-});
-
-route('POST', '/api/upload-excel/chunk', async (req, res) => {
-  const session = requireAuth(req, res, ['admin', 'supervisor']);
-  if (!session) return;
-  const parsed = url.parse(req.url, true);
-  const filePath = tmpPathFor(parsed.query.uploadId || '');
-  if (!filePath || !fs.existsSync(filePath)) return sendJson(res, 400, { error: 'uploadId invalido o expirado' });
-  let chunk;
-  try {
-    chunk = await readBody(req);
-  } catch (e) {
-    return sendJson(res, 400, { error: 'No se pudo leer el pedazo: ' + e.message });
-  }
-  fs.appendFileSync(filePath, chunk);
-  sendJson(res, 200, { ok: true, size: fs.statSync(filePath).size });
-});
-
-route('POST', '/api/upload-excel/finish', async (req, res) => {
-  const session = requireAuth(req, res, ['admin', 'supervisor']);
-  if (!session) return;
-  const parsed = url.parse(req.url, true);
-  const uploadId = parsed.query.uploadId || '';
-  const filePath = tmpPathFor(uploadId);
-  if (!filePath || !fs.existsSync(filePath)) return sendJson(res, 400, { error: 'uploadId invalido o expirado' });
-
-  uploadJobs.set(uploadId, { status: 'procesando' });
-  // Responder ya: procesarExcelYGuardar puede tardar varios minutos con
-  // archivos grandes y superar el timeout del proxy, que devuelve HTML
-  // en vez de JSON y rompe el .json() del frontend. El procesamiento
-  // sigue despues de esta respuesta y el resultado se consulta por /status.
-  sendJson(res, 202, { ok: true, uploadId, procesando: true });
-
-  try {
-    const resultado = await procesarExcelYGuardarStreaming(filePath, uploadFilenames.get(uploadId));
-    uploadJobs.set(uploadId, { status: 'listo', resultado });
-  } catch (e) {
-    uploadJobs.set(uploadId, { status: 'error', error: e.error || e.message || 'Error desconocido' });
-  } finally {
-    try { fs.unlinkSync(filePath); } catch (e) {}
-    uploadFilenames.delete(uploadId);
-  }
-});
-
-route('GET', '/api/upload-excel/status', async (req, res) => {
-  const session = requireAuth(req, res, ['admin', 'supervisor']);
-  if (!session) return;
-  const parsed = url.parse(req.url, true);
-  const uploadId = parsed.query.uploadId || '';
-  const job = uploadJobs.get(uploadId);
-  if (!job) return sendJson(res, 404, { error: 'uploadId invalido o expirado' });
-  if (job.status === 'error') { uploadJobs.delete(uploadId); return sendJson(res, 500, { error: job.error }); }
-  if (job.status === 'listo') { uploadJobs.delete(uploadId); return sendJson(res, 200, { status: 'listo', ...job.resultado }); }
-  sendJson(res, 200, { status: 'procesando' });
-});
-
-// Cada filtro llega como valores separados por "|" (el frontend permite elegir
-// mas de una opcion por filtro), por eso se arma un "IN (?,?,...)" en vez de
-// una comparacion "=" simple. parseMulti separa y descarta vacios.
-function parseMulti(v) {
-  if (!v) return [];
-  return String(v).split('|').map((s) => s.trim()).filter(Boolean);
-}
-function buildFiltros(query) {
-  const filtros = {
-    supervisor: parseMulti(query.supervisor),
-    camionero: parseMulti(query.camionero),
-    vendedor: parseMulti(query.vendedor),
-    dia: parseMulti(query.dia),
-  };
-  let needsJoin = !!(filtros.vendedor.length || filtros.dia.length);
-  let clause = '';
-  const params = [];
-  function addIn(campo, valores) {
-    if (!valores.length) return;
-    clause += ` AND ${campo} IN (${valores.map(() => '?').join(',')})`;
-    params.push(...valores);
-  }
-  addIn('v.supervisor', filtros.supervisor);
-  addIn('v.camionero', filtros.camionero);
-  addIn('c.personal_comercial', filtros.vendedor);
-  addIn('c.dias_visita', filtros.dia);
-  const join = needsJoin ? 'LEFT JOIN clientes c ON c.cliente_id = v.cliente_id' : '';
-  return { clause, params, join };
-}
-
-// Selector de periodo: uno o mas pares (mes, anio) elegidos libremente por
-// el usuario (multi-select en el frontend, valores "YYYY-MM" separados por
-// "|" con el parametro "periodos") - a diferencia del esquema anterior
-// (varios meses pero todos del MISMO anio), esto permite elegir un rango
-// que cruce el fin de año (ej. Noviembre 2025 a Junio 2026). Cada par se
-// codifica como el entero anio*100+mes para poder armar un IN (...) simple
-// en SQL. Se acepta tambien el formato viejo "meses"+"anio" (un solo anio)
-// y el mas viejo "mes" singular, como fallback de compatibilidad. Con un
-// solo periodo seleccionado el comportamiento es identico al de siempre (se
-// compara contra el mismo mes del anio anterior y contra el mes calendario
-// anterior). Con 2 o mas periodos seleccionados se compara cada mes elegido
-// contra el MISMO mes pero un anio antes, y no hay "mes anterior" (un rango
-// de varios meses no tiene un unico mes calendario anterior) - se deja null
-// y el frontend oculta esa columna.
-function parsePeriodos(query) {
-  let periodos = parseMulti(query.periodos)
-    .map((s) => {
-      const [a, m] = s.split('-').map(Number);
-      return { anio: a, mes: m };
-    })
-    .filter((p) => p.anio && p.mes >= 1 && p.mes <= 12);
-  if (!periodos.length) {
-    const anio = Number(query.anio);
-    let meses = parseMulti(query.meses).map(Number).filter(Boolean);
-    if (!meses.length && query.mes) meses = [Number(query.mes)];
-    meses = Array.from(new Set(meses)).filter((m) => m >= 1 && m <= 12);
-    if (anio && meses.length) periodos = meses.map((mes) => ({ anio, mes }));
-  }
-  const vistos = new Set();
-  periodos = periodos.filter((p) => {
-    const k = p.anio * 100 + p.mes;
-    if (vistos.has(k)) return false;
-    vistos.add(k);
-    return true;
-  });
-  periodos.sort((a, b) => (a.anio * 100 + a.mes) - (b.anio * 100 + b.mes));
-  return periodos;
-}
-function periodosClause(alias, periodos) {
-  const col = alias ? alias + '.' : '';
-  return {
-    clause: ` AND (${col}anio*100 + ${col}mes) IN (${periodos.map(() => '?').join(',')})`,
-    params: periodos.map((p) => p.anio * 100 + p.mes),
-  };
-}
-// Mismos meses, un anio antes cada uno (para la comparacion "año anterior").
-function periodosAnioAnterior(periodos) {
-  return periodos.map((p) => ({ anio: p.anio - 1, mes: p.mes }));
-}
-
-route('GET', '/api/filtros/opciones', async (req, res) => {
-  if (!requireAuth(req, res, ['admin', 'supervisor', 'vendedor'])) return;
-  const supervisores = db.prepare(`SELECT DISTINCT supervisor FROM ventas WHERE supervisor IS NOT NULL AND supervisor != '' ORDER BY supervisor`).all().map(r => r.supervisor);
-  const camioneros = db.prepare(`SELECT DISTINCT camionero FROM ventas WHERE camionero IS NOT NULL AND camionero != '' ORDER BY camionero`).all().map(r => r.camionero);
-  const vendedores = db.prepare(`SELECT DISTINCT personal_comercial FROM clientes WHERE personal_comercial IS NOT NULL AND personal_comercial != '' ORDER BY personal_comercial`).all().map(r => r.personal_comercial);
-  const dias = db.prepare(`SELECT DISTINCT dias_visita FROM clientes WHERE dias_visita IS NOT NULL AND dias_visita != '' ORDER BY dias_visita`).all().map(r => r.dias_visita);
-  sendJson(res, 200, { supervisores, camioneros, vendedores, dias });
-});
-
-// Lista de pares (mes, anio) que realmente tienen datos cargados - usado por
-// el frontend para armar el selector de periodo (solo se puede elegir un
-// periodo que exista, no hace falta un selector de año separado).
-route('GET', '/api/periodos-disponibles', async (req, res) => {
-  if (!requireAuth(req, res, ['admin', 'supervisor', 'vendedor'])) return;
-  const rows = db.prepare(`
-    SELECT DISTINCT anio, mes FROM ventas
-    WHERE anio IS NOT NULL AND mes IS NOT NULL
-    ORDER BY anio, mes
-  `).all();
-  sendJson(res, 200, rows.map(r => ({ anio: r.anio, mes: r.mes })));
-});
-
-route('GET', '/api/kpis', async (req, res) => {
-  if (!requireAuth(req, res, ['admin', 'supervisor', 'vendedor'])) return;
-  const parsed = url.parse(req.url, true);
-  const periodos = parsePeriodos(parsed.query);
-  if (!periodos.length) return sendJson(res, 400, { error: 'Faltan parametros de periodo' });
-  const { clause, params, join } = buildFiltros(parsed.query);
-  const { clause: pClause, params: pParams } = periodosClause('v', periodos);
-  const { clause: paClause, params: paParams } = periodosClause('v', periodosAnioAnterior(periodos));
-  const soloUnMes = periodos.length === 1;
-
-  const diasConfigRow = db.prepare('SELECT value FROM meta WHERE key = ?').get('dias_configurados');
-  const diasConfigurados = diasConfigRow ? Number(diasConfigRow.value) : null;
-  // dias_venta_reales se guarda por UN mes puntual al subir el archivo - con
-  // varios meses seleccionados no hay forma confiable de sumarlo, asi que
-  // queda null (y el proyectado tambien) salvo que se haya elegido un solo mes.
-  let diasReales = null;
-  if (soloUnMes) {
-    const diasRealesRow = db.prepare('SELECT value FROM meta WHERE key = ?').get(`dias_reales_${periodos[0].anio}_${String(periodos[0].mes).padStart(2, '0')}`);
-    diasReales = diasRealesRow ? Number(diasRealesRow.value) : null;
-  }
-
-  let mesAnteriorNum = null, anioMesAnterior = null;
-  if (soloUnMes) ({ mesAnteriorNum, anioMesAnterior } = periodoMesAnterior(periodos[0].mes, periodos[0].anio));
-
-  const CATS = ['Cervezas', 'Aguas', 'Vinos', 'Sidras'];
-  const resultado = {};
-  for (const cat of CATS) {
-    const actualRow = db.prepare(`SELECT SUM(v.um_hl) as total FROM ventas v ${join} WHERE v.categoria = ?${pClause}${clause}`).get(cat, ...pParams, ...params);
-    const anteriorRow = db.prepare(`SELECT SUM(v.um_hl) as total FROM ventas v ${join} WHERE v.categoria = ?${paClause}${clause}`).get(cat, ...paParams, ...params);
-    const actual = actualRow.total || 0;
-    const anterior = anteriorRow.total || 0;
-    let mesAnterior = null, variacionMesPct = null;
-    if (soloUnMes) {
-      const mesAnteriorRow = db.prepare(`SELECT SUM(v.um_hl) as total FROM ventas v ${join} WHERE v.categoria = ? AND v.mes = ? AND v.anio = ?${clause}`).get(cat, mesAnteriorNum, anioMesAnterior, ...params);
-      mesAnterior = mesAnteriorRow.total || 0;
-      variacionMesPct = mesAnterior > 0 ? ((actual - mesAnterior) / mesAnterior * 100) : null;
-    }
-    const proyectado = (diasReales && diasConfigurados) ? (actual / diasReales * diasConfigurados) : null;
-    const variacionPct = anterior > 0 ? ((actual - anterior) / anterior * 100) : null;
-    resultado[cat] = {
-      actual: Math.round(actual * 1000) / 1000,
-      anio_anterior: Math.round(anterior * 1000) / 1000,
-      mes_anterior: mesAnterior !== null ? Math.round(mesAnterior * 1000) / 1000 : null,
-      proyectado: proyectado !== null ? Math.round(proyectado * 1000) / 1000 : null,
-      variacion_pct: variacionPct !== null ? Math.round(variacionPct * 10) / 10 : null,
-      variacion_mes_pct: variacionMesPct !== null ? Math.round(variacionMesPct * 10) / 10 : null,
-    };
-  }
-  sendJson(res, 200, {
-    periodos,
-    mes_anterior_num: mesAnteriorNum,
-    anio_mes_anterior: anioMesAnterior,
-    dias_configurados: diasConfigurados,
-    dias_venta_reales: diasReales,
-    categorias: resultado,
-  });
-});
-// Mismo cuadro que /api/kpis (actual, proyectado, mes anterior, año anterior
-// y sus variaciones) pero contando CLIENTES DISTINTOS por categoria en vez de
-// sumar HL. Usa un umbral mas chico (0.0001, contra 0.001 en el resto de la
-// app) a pedido puntual del usuario para este cuadro.
-route('GET', '/api/kpis-compradores', async (req, res) => {
-  if (!requireAuth(req, res, ['admin', 'supervisor', 'vendedor'])) return;
-  const parsed = url.parse(req.url, true);
-  const periodos = parsePeriodos(parsed.query);
-  if (!periodos.length) return sendJson(res, 400, { error: 'Faltan parametros de periodo' });
-  const { clause, params, join } = buildFiltros(parsed.query);
-  const soloUnMes = periodos.length === 1;
-
-  const diasConfigRow = db.prepare('SELECT value FROM meta WHERE key = ?').get('dias_configurados');
-  const diasConfigurados = diasConfigRow ? Number(diasConfigRow.value) : null;
-  let diasReales = null;
-  if (soloUnMes) {
-    const diasRealesRow = db.prepare('SELECT value FROM meta WHERE key = ?').get(`dias_reales_${periodos[0].anio}_${String(periodos[0].mes).padStart(2, '0')}`);
-    diasReales = diasRealesRow ? Number(diasRealesRow.value) : null;
-  }
-
-  let mesAnteriorNum = null, anioMesAnterior = null;
-  if (soloUnMes) ({ mesAnteriorNum, anioMesAnterior } = periodoMesAnterior(periodos[0].mes, periodos[0].anio));
-
-  const CATS = ['Cervezas', 'Aguas', 'Vinos', 'Sidras'];
-  // Cuenta clientes distintos que compraron la categoria en CUALQUIERA de los
-  // periodos de periodosArr (sumando su HL en esos periodos para el umbral) -
-  // un cliente que compro en varios de esos periodos cuenta UNA sola vez,
-  // nunca sumado por mes.
-  function contarCompradores(cat, periodosArr) {
-    const { clause: pClause, params: pParams } = periodosClause('v', periodosArr);
-    const row = db.prepare(`
-      SELECT COUNT(*) as n FROM (
-        SELECT v.cliente_id FROM ventas v ${join}
-        WHERE v.categoria = ?${pClause}${clause}
-        GROUP BY v.cliente_id HAVING SUM(v.um_hl) >= 0.0001
-      )
-    `).get(cat, ...pParams, ...params);
-    return row.n || 0;
-  }
-  const resultado = {};
-  for (const cat of CATS) {
-    const actual = contarCompradores(cat, periodos);
-    const anterior = contarCompradores(cat, periodosAnioAnterior(periodos));
-    let mesAnterior = null, variacionMesPct = null;
-    if (soloUnMes) {
-      mesAnterior = contarCompradores(cat, [{ anio: anioMesAnterior, mes: mesAnteriorNum }]);
-      variacionMesPct = mesAnterior > 0 ? ((actual - mesAnterior) / mesAnterior * 100) : null;
-    }
-    const proyectado = (diasReales && diasConfigurados) ? (actual / diasReales * diasConfigurados) : null;
-    const variacionPct = anterior > 0 ? ((actual - anterior) / anterior * 100) : null;
-    resultado[cat] = {
-      actual,
-      anio_anterior: anterior,
-      mes_anterior: mesAnterior,
-      proyectado: proyectado !== null ? Math.round(proyectado) : null,
-      variacion_pct: variacionPct !== null ? Math.round(variacionPct * 10) / 10 : null,
-      variacion_mes_pct: variacionMesPct !== null ? Math.round(variacionMesPct * 10) / 10 : null,
-    };
-  }
-  sendJson(res, 200, {
-    periodos,
-    mes_anterior_num: mesAnteriorNum,
-    anio_mes_anterior: anioMesAnterior,
-    dias_configurados: diasConfigurados,
-    dias_venta_reales: diasReales,
-    categorias: resultado,
-  });
-});
-route('GET', '/api/meta', async (req, res) => {
-  if (!requireAuth(req, res, ['admin', 'supervisor', 'vendedor'])) return;
-  const rows = db.prepare('SELECT key, value FROM meta').all();
-  const out = {};
-  rows.forEach(r => out[r.key] = r.value);
-  sendJson(res, 200, out);
-});
-
-route('GET', '/api/config/dias', async (req, res) => {
-  if (!requireAuth(req, res, ['admin', 'supervisor', 'vendedor'])) return;
-  const row = db.prepare('SELECT value FROM meta WHERE key = ?').get('dias_configurados');
-  sendJson(res, 200, { dias_configurados: row ? Number(row.value) : null });
-});
-route('POST', '/api/config/dias', async (req, res) => {
-  if (!requireAuth(req, res, ['admin'])) return;
-  const body = JSON.parse((await readBody(req)).toString('utf-8') || '{}');
-  const dias = Number(body.dias);
-  if (!dias || dias <= 0 || dias > 31) return sendJson(res, 400, { error: 'Dias invalidos' });
-  db.prepare('INSERT OR REPLACE INTO meta (key, value) VALUES (?,?)').run('dias_configurados', String(dias));
-  sendJson(res, 200, { ok: true, dias_configurados: dias });
-});
-
-route('GET', '/api/admin/users', async (req, res) => {
-  if (!requireAuth(req, res, ['admin'])) return;
-  const rows = db.prepare('SELECT id, username, role FROM users ORDER BY role, username').all();
-  sendJson(res, 200, rows);
-});
-route('POST', '/api/admin/users', async (req, res) => {
-  if (!requireAuth(req, res, ['admin'])) return;
-  const body = JSON.parse((await readBody(req)).toString('utf-8') || '{}');
-  const { username, password, role } = body;
-  if (!username || !password || !role) {
-    return sendJson(res, 400, { error: 'Faltan datos: username, password y role son obligatorios' });
-  }
-  if (!['admin', 'supervisor', 'vendedor'].includes(role)) {
-    return sendJson(res, 400, { error: 'Rol invalido' });
-  }
-  if (authLib.findUserByUsername(username)) {
-    return sendJson(res, 400, { error: 'Ese nombre de usuario ya existe' });
-  }
-  try {
-    authLib.createUser(username, password, role);
-  } catch (e) {
-    return sendJson(res, 500, { error: 'Error creando usuario: ' + e.message });
-  }
-  sendJson(res, 200, { ok: true });
-});
-route('DELETE', '/api/admin/users/:id', async (req, res, params) => {
-  const session = requireAuth(req, res, ['admin']);
-  if (!session) return;
-  if (String(session.user_id) === String(params.id)) {
-    return sendJson(res, 400, { error: 'No podes borrar tu propio usuario' });
-  }
-  db.prepare('DELETE FROM sessions WHERE user_id = ?').run(params.id);
-  db.prepare('DELETE FROM users WHERE id = ?').run(params.id);
-  sendJson(res, 200, { ok: true });
-});
-route('POST', '/api/admin/users/:id/reset-password', async (req, res, params) => {
-  if (!requireAuth(req, res, ['admin'])) return;
-  const body = JSON.parse((await readBody(req)).toString('utf-8') || '{}');
-  if (!body.password) return sendJson(res, 400, { error: 'Falta la nueva contraseña' });
-  const { hash, salt } = authLib.hashPassword(body.password);
-  db.prepare('UPDATE users SET password_hash = ?, salt = ? WHERE id = ?').run(hash, salt, params.id);
-  sendJson(res, 200, { ok: true });
-});
-// Cambio de la PROPIA contraseña (cualquier usuario logueado, no requiere ser
-// admin) - a diferencia de /reset-password (solo admin, para otros usuarios),
-// esta pide la contraseña actual para confirmar identidad.
-route('POST', '/api/me/change-password', async (req, res) => {
-  const session = requireAuth(req, res, ['admin', 'supervisor', 'vendedor']);
-  if (!session) return;
-  const body = JSON.parse((await readBody(req)).toString('utf-8') || '{}');
-  const { currentPassword, newPassword } = body;
-  if (!currentPassword || !newPassword) {
-    return sendJson(res, 400, { error: 'Faltan datos: contraseña actual y nueva' });
-  }
-  if (newPassword.length < 4) {
-    return sendJson(res, 400, { error: 'La contraseña nueva debe tener al menos 4 caracteres' });
-  }
-  const user = db.prepare('SELECT * FROM users WHERE id = ?').get(session.user_id);
-  if (!user || !authLib.verifyPassword(currentPassword, user.salt, user.password_hash)) {
-    return sendJson(res, 400, { error: 'La contraseña actual es incorrecta' });
-  }
-  const { hash, salt } = authLib.hashPassword(newPassword);
-  db.prepare('UPDATE users SET password_hash = ?, salt = ? WHERE id = ?').run(hash, salt, session.user_id);
-  sendJson(res, 200, { ok: true });
-});
-
-route('GET', '/api/ranking/marcas', async (req, res) => {
-  if (!requireAuth(req, res, ['admin', 'supervisor', 'vendedor'])) return;
-  const parsed = url.parse(req.url, true);
-  const periodos = parsePeriodos(parsed.query);
-  const categoria = parsed.query.categoria || '';
-  if (!periodos.length || !categoria) return sendJson(res, 400, { error: 'Faltan parametros de periodo y categoria' });
-  const { clause, params, join } = buildFiltros(parsed.query);
-  const { clause: pClause, params: pParams } = periodosClause('v', periodos);
-  const rows = db.prepare(`
-    SELECT v.marca as marca, SUM(v.um_hl) as hl FROM ventas v ${join}
-    WHERE v.categoria = ?${pClause}${clause}
-    GROUP BY v.marca HAVING SUM(v.um_hl) >= 0.001
-    ORDER BY hl DESC
-  `).all(categoria, ...pParams, ...params);
-  sendJson(res, 200, rows.map(r => ({ marca: r.marca, hl: Math.round(r.hl * 1000) / 1000 })));
-});
-route('GET', '/api/ranking/clientes', async (req, res) => {
-  if (!requireAuth(req, res, ['admin', 'supervisor', 'vendedor'])) return;
-  const parsed = url.parse(req.url, true);
-  const periodos = parsePeriodos(parsed.query);
-  const categoria = parsed.query.categoria || '';
-  const marca = parsed.query.marca || '';
-  if (!periodos.length || !categoria || !marca) return sendJson(res, 400, { error: 'Faltan parametros de periodo, categoria y marca' });
-  const filtros = buildFiltros(parsed.query);
-  const { clause: pClause, params: pParams } = periodosClause('v', periodos);
-  const rows = db.prepare(`
-    SELECT v.cliente_id as cliente_id, c.razon_social as razon_social, c.domicilio as domicilio, SUM(v.um_hl) as hl
-    FROM ventas v LEFT JOIN clientes c ON c.cliente_id = v.cliente_id
-    WHERE v.categoria = ? AND v.marca = ?${pClause}${filtros.clause}
-    GROUP BY v.cliente_id HAVING SUM(v.um_hl) >= 0.001
-    ORDER BY hl DESC LIMIT 15
-  `).all(categoria, marca, ...pParams, ...filtros.params);
-  sendJson(res, 200, rows.map(r => ({
-    cliente_id: r.cliente_id,
-    razon_social: r.razon_social || '',
-    domicilio: r.domicilio || '',
-    hl: Math.round(r.hl * 1000) / 1000,
-  })));
-});
-
-route('GET', '/api/referencia/supervisores', async (req, res) => {
-  if (!requireAuth(req, res, ['admin', 'supervisor', 'vendedor'])) return;
-  const row = db.prepare('SELECT value FROM meta WHERE key = ?').get('sup_ref_json');
-  let mapping = {};
-  if (row) { try { mapping = JSON.parse(row.value); } catch (e) { mapping = {}; } }
-  sendJson(res, 200, { mapping });
-  });
-route('POST', '/api/referencia/supervisores', async (req, res) => {
-  if (!requireAuth(req, res, ['admin'])) return;
-  const body = JSON.parse((await readBody(req)).toString('utf-8') || '{}');
-  if (!body.mapping || typeof body.mapping !== 'object') return sendJson(res, 400, { error: 'Falta mapping' });
-  db.prepare('INSERT OR REPLACE INTO meta (key, value) VALUES (?,?)').run('sup_ref_json', JSON.stringify(body.mapping));
-  sendJson(res, 200, { ok: true, cantidad: Object.keys(body.mapping).length });
-});
-
-// Actualiza/agrega clientes a partir del archivo "universo" (maestro de
-// clientes del ERP, distinto del archivo de venta del dia). Solo admin -
-// a pedido del usuario, es la unica forma de que aparezcan clientes nuevos
-// en la app de vendedores (la carga de venta del dia NUNCA toca la tabla
-// clientes, ver guardarVentas/finalizarYGuardar mas arriba). Es un upsert
-// (INSERT OR REPLACE por cliente_id): un cliente que no este en este
-// archivo no se borra, solo se actualizan/agregan los que si vienen.
-route('POST', '/api/referencia/universo', async (req, res) => {
-  if (!requireAuth(req, res, ['admin'])) return;
-  const body = JSON.parse((await readBody(req)).toString('utf-8') || '{}');
-  if (!Array.isArray(body.clientes)) return sendJson(res, 400, { error: 'Falta clientes (array)' });
-  let cantidad = 0;
-  db.exec('BEGIN');
-  try {
-    const insCliente = db.prepare(`
-      INSERT OR REPLACE INTO clientes (cliente_id, razon_social, domicilio, personal_comercial, dias_visita)
-      VALUES (?,?,?,?,?)
-    `);
-    for (const c of body.clientes) {
-      if (!c || c.cliente_id === undefined || c.cliente_id === null || c.cliente_id === '') continue;
-      insCliente.run(String(c.cliente_id), c.razon_social || '', c.domicilio || '', c.personal_comercial || '', c.dias_visita || '');
-      cantidad++;
-    }
-    db.exec('COMMIT');
-  } catch (e) {
-    db.exec('ROLLBACK');
-    return sendJson(res, 500, { error: 'Error guardando clientes: ' + e.message });
-  }
-  sendJson(res, 200, { ok: true, cantidad });
-});
-
-route('GET', '/api/ranking/clientes-categoria', async (req, res) => {
-  if (!requireAuth(req, res, ['admin', 'supervisor', 'vendedor'])) return;
-  const parsed = url.parse(req.url, true);
-  const periodos = parsePeriodos(parsed.query);
-  const categoria = parsed.query.categoria || '';
-  const limit = Math.min(Number(parsed.query.limit) || 20, 100);
-  if (!periodos.length || !categoria) return sendJson(res, 400, { error: 'Faltan parametros de periodo y categoria' });
-  const filtros = buildFiltros(parsed.query);
-  const { clause: pClause, params: pParams } = periodosClause('v', periodos);
-  const rows = db.prepare(`
-    SELECT v.cliente_id as cliente_id, c.razon_social as razon_social, c.domicilio as domicilio, SUM(v.um_hl) as hl
-    FROM ventas v LEFT JOIN clientes c ON c.cliente_id = v.cliente_id
-    WHERE v.categoria = ?${pClause}${filtros.clause}
-    GROUP BY v.cliente_id HAVING SUM(v.um_hl) >= 0.001
-    ORDER BY hl DESC LIMIT ?
-  `).all(categoria, ...pParams, ...filtros.params, limit);
-  sendJson(res, 200, rows.map(r => ({
-    cliente_id: r.cliente_id,
-    razon_social: r.razon_social || '',
-    domicilio: r.domicilio || '',
-    hl: Math.round(r.hl * 1000) / 1000,
-  })));
-});
-
-route('GET', '/api/compradores', async (req, res) => {
-  if (!requireAuth(req, res, ['admin', 'supervisor', 'vendedor'])) return;
-  const parsed = url.parse(req.url, true);
-  const mes = Number(parsed.query.mes);
-  const anio = Number(parsed.query.anio);
-  if (!mes || !anio) return sendJson(res, 400, { error: 'Faltan parametros mes y anio' });
-  const { clause, params, join } = buildFiltros(parsed.query);
-  const CATS = ['Cervezas', 'Aguas', 'Vinos', 'Sidras'];
-  const resultado = {};
-  for (const cat of CATS) {
-    const rows = db.prepare(`
-      SELECT v.cliente_id FROM ventas v ${join}
-      WHERE v.categoria = ? AND v.mes = ? AND v.anio = ?${clause}
-      GROUP BY v.cliente_id HAVING SUM(v.um_hl) >= 0.001
-    `).all(cat, mes, anio, ...params);
-    resultado[cat] = rows.length;
-  }
-  const totalRows = db.prepare(`
-    SELECT DISTINCT v.cliente_id FROM ventas v ${join}
-    WHERE v.mes = ? AND v.anio = ?${clause}
-  `).all(mes, anio, ...params);
-  sendJson(res, 200, { categorias: resultado, total: totalRows.length });
-});
-
-function periodoMesAnterior(mes, anio) {
-  let mesAnteriorNum = mes - 1, anioMesAnterior = anio;
-  if (mesAnteriorNum < 1) { mesAnteriorNum = 12; anioMesAnterior = anio - 1; }
-  return { mesAnteriorNum, anioMesAnterior };
-}
-
-// "AMSTEL IPANEMA" y "AMSTEL LAGER" son la misma marca renombrada en algun
-// momento dentro de los datos historicos de ventas. Se unifican bajo un solo
-// nombre para que las comparaciones entre periodos (actual / mes anterior /
-// año anterior) en marca-canal no queden rotas por el cambio de nombre.
-function normalizarMarca(marca) {
-  if (marca === 'AMSTEL IPANEMA') return 'AMSTEL LAGER';
-  return marca;
-}
-
-route('GET', '/api/canal', async (req, res) => {
-  if (!requireAuth(req, res, ['admin', 'supervisor', 'vendedor'])) return;
-  const parsed = url.parse(req.url, true);
-  const periodos = parsePeriodos(parsed.query);
-  if (!periodos.length) return sendJson(res, 400, { error: 'Faltan parametros de periodo' });
-  const { clause, params, join } = buildFiltros(parsed.query);
-  const soloUnMes = periodos.length === 1;
-  let mesAnteriorNum = null, anioMesAnterior = null;
-  if (soloUnMes) ({ mesAnteriorNum, anioMesAnterior } = periodoMesAnterior(periodos[0].mes, periodos[0].anio));
-  const CATS = ['Cervezas', 'Aguas', 'Vinos', 'Sidras'];
-
-  function volumenPorCanal(periodosArr) {
-    const { clause: pClause, params: pParams } = periodosClause('v', periodosArr);
-    const rows = db.prepare(`
-      SELECT v.canal as canal, v.categoria as categoria, SUM(v.um_hl) as hl
-      FROM ventas v ${join}
-      WHERE 1=1${pClause}${clause}
-      GROUP BY v.canal, v.categoria
-    `).all(...pParams, ...params);
-    const out = {};
-    for (const r of rows) {
-      const canal = r.canal || 'SIN CANAL';
-      if (!out[canal]) out[canal] = {};
-      out[canal][r.categoria] = r.hl || 0;
-    }
-    return out;
-  }
-
-  const actualData = volumenPorCanal(periodos);
-  const anioAnteriorData = volumenPorCanal(periodosAnioAnterior(periodos));
-  const mesAnteriorData = soloUnMes ? volumenPorCanal([{ anio: anioMesAnterior, mes: mesAnteriorNum }]) : {};
-  const canales = Array.from(new Set([
-    ...Object.keys(actualData), ...Object.keys(anioAnteriorData), ...Object.keys(mesAnteriorData),
-  ])).sort();
-
-  const r3 = (n) => Math.round((n || 0) * 1000) / 1000;
-  function armarFila(canal) {
-    const categorias = {};
-    let tA = 0, tAA = 0, tMA = 0;
-    for (const cat of CATS) {
-      const a = (actualData[canal] && actualData[canal][cat]) || 0;
-      const aa = (anioAnteriorData[canal] && anioAnteriorData[canal][cat]) || 0;
-      const ma = (mesAnteriorData[canal] && mesAnteriorData[canal][cat]) || 0;
-      categorias[cat] = { actual: r3(a), anio_anterior: r3(aa), mes_anterior: soloUnMes ? r3(ma) : null };
-      tA += a; tAA += aa; tMA += ma;
-    }
-    return { canal, categorias, total: { actual: r3(tA), anio_anterior: r3(tAA), mes_anterior: soloUnMes ? r3(tMA) : null } };
-  }
-
-  const filas = canales.map(armarFila);
-  const totalGeneral = { categorias: {}, total: { actual: 0, anio_anterior: 0, mes_anterior: soloUnMes ? 0 : null } };
-  for (const cat of CATS) {
-    let a = 0, aa = 0, ma = 0;
-    for (const f of filas) { a += f.categorias[cat].actual; aa += f.categorias[cat].anio_anterior; ma += (f.categorias[cat].mes_anterior || 0); }
-    totalGeneral.categorias[cat] = { actual: r3(a), anio_anterior: r3(aa), mes_anterior: soloUnMes ? r3(ma) : null };
-    totalGeneral.total.actual += a; totalGeneral.total.anio_anterior += aa; if (soloUnMes) totalGeneral.total.mes_anterior += ma;
-  }
-  totalGeneral.total = { actual: r3(totalGeneral.total.actual), anio_anterior: r3(totalGeneral.total.anio_anterior), mes_anterior: soloUnMes ? r3(totalGeneral.total.mes_anterior) : null };
-
-  sendJson(res, 200, {
-    periodos, mes_anterior_num: mesAnteriorNum, anio_mes_anterior: anioMesAnterior,
-    filas, total_general: totalGeneral,
-  });
-});
-
-route('GET', '/api/canal-compradores', async (req, res) => {
-  if (!requireAuth(req, res, ['admin', 'supervisor', 'vendedor'])) return;
-  const parsed = url.parse(req.url, true);
-  const periodos = parsePeriodos(parsed.query);
-  if (!periodos.length) return sendJson(res, 400, { error: 'Faltan parametros de periodo' });
-  const { clause, params, join } = buildFiltros(parsed.query);
-  const soloUnMes = periodos.length === 1;
-  let mesAnteriorNum = null, anioMesAnterior = null;
-  if (soloUnMes) ({ mesAnteriorNum, anioMesAnterior } = periodoMesAnterior(periodos[0].mes, periodos[0].anio));
-  const CATS = ['Cervezas', 'Aguas', 'Vinos', 'Sidras'];
-
-  // Cliente distinto que compro en CUALQUIERA de los periodos de periodosArr
-  // cuenta una sola vez (por canal, por categoria y en el total general) -
-  // mismo criterio que contarCompradores en /api/kpis-compradores.
-  function compradoresPorCanal(periodosArr) {
-    const { clause: pClause, params: pParams } = periodosClause('v', periodosArr);
-    const rows = db.prepare(`
-      SELECT canal, categoria, COUNT(*) as n FROM (
-        SELECT v.canal as canal, v.categoria as categoria, v.cliente_id as cliente_id, SUM(v.um_hl) as hl
-        FROM ventas v ${join}
-        WHERE 1=1${pClause}${clause}
-        GROUP BY v.canal, v.categoria, v.cliente_id
-        HAVING SUM(v.um_hl) >= 0.001
-      ) GROUP BY canal, categoria
-    `).all(...pParams, ...params);
-    const porCat = {};
-    for (const r of rows) {
-      const canal = r.canal || 'SIN CANAL';
-      if (!porCat[canal]) porCat[canal] = {};
-      porCat[canal][r.categoria] = r.n;
-    }
-    const totalRows = db.prepare(`
-      SELECT canal, COUNT(*) as n FROM (
-        SELECT v.canal as canal, v.cliente_id as cliente_id, SUM(v.um_hl) as hl
-        FROM ventas v ${join}
-        WHERE 1=1${pClause}${clause}
-        GROUP BY v.canal, v.cliente_id
-        HAVING SUM(v.um_hl) >= 0.001
-      ) GROUP BY canal
-    `).all(...pParams, ...params);
-    const totales = {};
-    for (const r of totalRows) totales[r.canal || 'SIN CANAL'] = r.n;
-    return { porCat, totales };
-  }
-
-  function totalPorCategoria(periodosArr) {
-    const { clause: pClause, params: pParams } = periodosClause('v', periodosArr);
-    const rows = db.prepare(`
-      SELECT categoria, COUNT(*) as n FROM (
-        SELECT v.categoria as categoria, v.cliente_id as cliente_id, SUM(v.um_hl) as hl
-        FROM ventas v ${join}
-        WHERE 1=1${pClause}${clause}
-        GROUP BY v.categoria, v.cliente_id
-        HAVING SUM(v.um_hl) >= 0.001
-      ) GROUP BY categoria
-    `).all(...pParams, ...params);
-    const out = {};
-    for (const r of rows) out[r.categoria] = r.n;
-    return out;
-  }
-  function totalGeneralClientes(periodosArr) {
-    const { clause: pClause, params: pParams } = periodosClause('v', periodosArr);
-    const row = db.prepare(`
-      SELECT COUNT(*) as n FROM (
-        SELECT v.cliente_id FROM ventas v ${join}
-        WHERE 1=1${pClause}${clause}
-        GROUP BY v.cliente_id HAVING SUM(v.um_hl) >= 0.001
-      )
-    `).get(...pParams, ...params);
-    return row.n || 0;
-  }
-
-  const actualData = compradoresPorCanal(periodos);
-  const anioAnteriorData = compradoresPorCanal(periodosAnioAnterior(periodos));
-  const mesAnteriorData = soloUnMes ? compradoresPorCanal([{ anio: anioMesAnterior, mes: mesAnteriorNum }]) : { porCat: {}, totales: {} };
-  const canales = Array.from(new Set([
-    ...Object.keys(actualData.totales), ...Object.keys(anioAnteriorData.totales), ...Object.keys(mesAnteriorData.totales),
-  ])).sort();
-
-  function armarFila(canal) {
-    const categorias = {};
-    for (const cat of CATS) {
-      categorias[cat] = {
-        actual: (actualData.porCat[canal] && actualData.porCat[canal][cat]) || 0,
-        anio_anterior: (anioAnteriorData.porCat[canal] && anioAnteriorData.porCat[canal][cat]) || 0,
-        mes_anterior: soloUnMes ? ((mesAnteriorData.porCat[canal] && mesAnteriorData.porCat[canal][cat]) || 0) : null,
-      };
-    }
-    return {
-      canal, categorias,
-      total: {
-        actual: actualData.totales[canal] || 0,
-        anio_anterior: anioAnteriorData.totales[canal] || 0,
-        mes_anterior: soloUnMes ? (mesAnteriorData.totales[canal] || 0) : null,
-      },
-    };
-  }
-
-  const filas = canales.map(armarFila);
-  const totalCatActual = totalPorCategoria(periodos);
-  const totalCatAnioAnt = totalPorCategoria(periodosAnioAnterior(periodos));
-  const totalCatMesAnt = soloUnMes ? totalPorCategoria([{ anio: anioMesAnterior, mes: mesAnteriorNum }]) : {};
-  const totalGeneral = {
-    categorias: {},
-    total: {
-      actual: totalGeneralClientes(periodos),
-      anio_anterior: totalGeneralClientes(periodosAnioAnterior(periodos)),
-      mes_anterior: soloUnMes ? totalGeneralClientes([{ anio: anioMesAnterior, mes: mesAnteriorNum }]) : null,
-    },
-  };
-  for (const cat of CATS) {
-    totalGeneral.categorias[cat] = {
-      actual: totalCatActual[cat] || 0,
-      anio_anterior: totalCatAnioAnt[cat] || 0,
-      mes_anterior: soloUnMes ? (totalCatMesAnt[cat] || 0) : null,
-    };
-  }
-
-  sendJson(res, 200, {
-    periodos, mes_anterior_num: mesAnteriorNum, anio_mes_anterior: anioMesAnterior,
-    filas, total_general: totalGeneral,
-  });
-});
-
-// Volumen (HL) por marca y canal, para UNA categoria a la vez (Cervezas, Aguas,
-// Vinos o Sidras). Misma logica que /api/canal pero agrupando por v.marca en
-// vez de v.categoria, y los "grupos" de columnas son los canales (dinamicos,
-// se descubren con SELECT DISTINCT en vez de estar hardcodeados).
-route('GET', '/api/marca-canal', async (req, res) => {
-  if (!requireAuth(req, res, ['admin', 'supervisor', 'vendedor'])) return;
-  const parsed = url.parse(req.url, true);
-  const periodos = parsePeriodos(parsed.query);
-  const categoria = parsed.query.categoria || '';
-  if (!periodos.length || !categoria) return sendJson(res, 400, { error: 'Faltan parametros de periodo y categoria' });
-  const { clause, params, join } = buildFiltros(parsed.query);
-  const soloUnMes = periodos.length === 1;
-  let mesAnteriorNum = null, anioMesAnterior = null;
-  if (soloUnMes) ({ mesAnteriorNum, anioMesAnterior } = periodoMesAnterior(periodos[0].mes, periodos[0].anio));
-
-  function volumenPorMarca(periodosArr) {
-    const { clause: pClause, params: pParams } = periodosClause('v', periodosArr);
-    const rows = db.prepare(`
-      SELECT v.marca as marca, v.canal as canal, SUM(v.um_hl) as hl
-      FROM ventas v ${join}
-      WHERE v.categoria = ?${pClause}${clause}
-      GROUP BY v.marca, v.canal
-    `).all(categoria, ...pParams, ...params);
-    const out = {};
-    for (const r of rows) {
-      const marca = normalizarMarca(r.marca || 'SIN MARCA');
-      const canal = r.canal || 'SIN CANAL';
-      if (!out[marca]) out[marca] = {};
-      out[marca][canal] = (out[marca][canal] || 0) + (r.hl || 0);
-    }
-    return out;
-  }
-
-  const actualData = volumenPorMarca(periodos);
-  const anioAnteriorData = volumenPorMarca(periodosAnioAnterior(periodos));
-  const mesAnteriorData = soloUnMes ? volumenPorMarca([{ anio: anioMesAnterior, mes: mesAnteriorNum }]) : {};
-  const marcas = Array.from(new Set([
-    ...Object.keys(actualData), ...Object.keys(anioAnteriorData), ...Object.keys(mesAnteriorData),
-  ])).sort();
-  const canales = Array.from(new Set([
-    ...Object.values(actualData).flatMap(o => Object.keys(o)),
-    ...Object.values(anioAnteriorData).flatMap(o => Object.keys(o)),
-    ...Object.values(mesAnteriorData).flatMap(o => Object.keys(o)),
-  ])).sort();
-
-  const r3 = (n) => Math.round((n || 0) * 1000) / 1000;
-  function armarFila(marca) {
-    const porGrupo = {};
-    let tA = 0, tAA = 0, tMA = 0;
-    for (const canal of canales) {
-      const a = (actualData[marca] && actualData[marca][canal]) || 0;
-      const aa = (anioAnteriorData[marca] && anioAnteriorData[marca][canal]) || 0;
-      const ma = (mesAnteriorData[marca] && mesAnteriorData[marca][canal]) || 0;
-      porGrupo[canal] = { actual: r3(a), anio_anterior: r3(aa), mes_anterior: soloUnMes ? r3(ma) : null };
-      tA += a; tAA += aa; tMA += ma;
-    }
-    return { nombre: marca, porGrupo, total: { actual: r3(tA), anio_anterior: r3(tAA), mes_anterior: soloUnMes ? r3(tMA) : null } };
-  }
-
-  const filas = marcas.map(armarFila).sort((a, b) => b.total.actual - a.total.actual);
-  const totalGeneral = { porGrupo: {}, total: { actual: 0, anio_anterior: 0, mes_anterior: soloUnMes ? 0 : null } };
-  for (const canal of canales) {
-    let a = 0, aa = 0, ma = 0;
-    for (const f of filas) { a += f.porGrupo[canal].actual; aa += f.porGrupo[canal].anio_anterior; ma += (f.porGrupo[canal].mes_anterior || 0); }
-    totalGeneral.porGrupo[canal] = { actual: r3(a), anio_anterior: r3(aa), mes_anterior: soloUnMes ? r3(ma) : null };
-    totalGeneral.total.actual += a; totalGeneral.total.anio_anterior += aa; if (soloUnMes) totalGeneral.total.mes_anterior += ma;
-  }
-  totalGeneral.total = { actual: r3(totalGeneral.total.actual), anio_anterior: r3(totalGeneral.total.anio_anterior), mes_anterior: soloUnMes ? r3(totalGeneral.total.mes_anterior) : null };
-
-  sendJson(res, 200, {
-    periodos, mes_anterior_num: mesAnteriorNum, anio_mes_anterior: anioMesAnterior,
-    grupos: canales, filas, total_general: totalGeneral,
-  });
-});
-
-// Compradores (clientes distintos) por marca y canal, para UNA categoria a la
-// vez. Misma idea que /api/marca-canal pero contando clientes en vez de sumar HL.
-route('GET', '/api/marca-canal-compradores', async (req, res) => {
-  if (!requireAuth(req, res, ['admin', 'supervisor', 'vendedor'])) return;
-  const parsed = url.parse(req.url, true);
-  const periodos = parsePeriodos(parsed.query);
-  const categoria = parsed.query.categoria || '';
-  if (!periodos.length || !categoria) return sendJson(res, 400, { error: 'Faltan parametros de periodo y categoria' });
-  const { clause, params, join } = buildFiltros(parsed.query);
-  const soloUnMes = periodos.length === 1;
-  let mesAnteriorNum = null, anioMesAnterior = null;
-  if (soloUnMes) ({ mesAnteriorNum, anioMesAnterior } = periodoMesAnterior(periodos[0].mes, periodos[0].anio));
-
-  // Cliente distinto que compro esa marca en CUALQUIERA de los periodos de
-  // periodosArr cuenta una sola vez (por canal), no una vez por mes.
-  function compradoresPorMarca(periodosArr) {
-    const { clause: pClause, params: pParams } = periodosClause('v', periodosArr);
-    const rows = db.prepare(`
-      SELECT marca, canal, COUNT(*) as n FROM (
-        SELECT
-          CASE WHEN v.marca = 'AMSTEL IPANEMA' THEN 'AMSTEL LAGER' ELSE v.marca END as marca,
-          v.canal as canal, v.cliente_id as cliente_id, SUM(v.um_hl) as hl
-        FROM ventas v ${join}
-        WHERE v.categoria = ?${pClause}${clause}
-        GROUP BY marca, v.canal, v.cliente_id
-        HAVING SUM(v.um_hl) >= 0.001
-      ) GROUP BY marca, canal
-    `).all(categoria, ...pParams, ...params);
-    const out = {};
-    for (const r of rows) {
-      const marca = r.marca || 'SIN MARCA';
-      const canal = r.canal || 'SIN CANAL';
-      if (!out[marca]) out[marca] = {};
-      out[marca][canal] = r.n;
-    }
-    return out;
-  }
-
-  const actualData = compradoresPorMarca(periodos);
-  const anioAnteriorData = compradoresPorMarca(periodosAnioAnterior(periodos));
-  const mesAnteriorData = soloUnMes ? compradoresPorMarca([{ anio: anioMesAnterior, mes: mesAnteriorNum }]) : {};
-  const marcas = Array.from(new Set([
-    ...Object.keys(actualData), ...Object.keys(anioAnteriorData), ...Object.keys(mesAnteriorData),
-  ])).sort();
-  const canales = Array.from(new Set([
-    ...Object.values(actualData).flatMap(o => Object.keys(o)),
-    ...Object.values(anioAnteriorData).flatMap(o => Object.keys(o)),
-    ...Object.values(mesAnteriorData).flatMap(o => Object.keys(o)),
-  ])).sort();
-
-  function armarFila(marca) {
-    const porGrupo = {};
-    for (const canal of canales) {
-      porGrupo[canal] = {
-        actual: (actualData[marca] && actualData[marca][canal]) || 0,
-        anio_anterior: (anioAnteriorData[marca] && anioAnteriorData[marca][canal]) || 0,
-        mes_anterior: soloUnMes ? ((mesAnteriorData[marca] && mesAnteriorData[marca][canal]) || 0) : null,
-      };
-    }
-    let tA = 0, tAA = 0, tMA = 0;
-    for (const canal of canales) { tA += porGrupo[canal].actual; tAA += porGrupo[canal].anio_anterior; tMA += (porGrupo[canal].mes_anterior || 0); }
-    return { nombre: marca, porGrupo, total: { actual: tA, anio_anterior: tAA, mes_anterior: soloUnMes ? tMA : null } };
-  }
-
-  const filas = marcas.map(armarFila).sort((a, b) => b.total.actual - a.total.actual);
-
-  // El "Total general" NO es la suma de los compradores de cada marca: un
-  // cliente que compro 2 marcas de la categoria cuenta como 1 comprador, no
-  // como 2 (eso es lo que pasaba antes, sumando filas.porGrupo[canal], y
-  // por eso el total general daba mas alto que la cantidad real de
-  // compradores). Se cuenta clientes distintos directo por SQL - por canal
-  // (agrupando marcas) y en total (agrupando canales tambien), igual que
-  // hace /api/kpis-compradores para la tarjeta "Compradores" de arriba
-  // (mismo umbral 0.0001, para que el numero coincida con esa tarjeta). Con
-  // varios periodos seleccionados, cuenta clientes que compraron al menos
-  // una vez en CUALQUIERA de esos periodos (nunca sumado por mes).
-  function compradoresDistintosPorCanal(periodosArr) {
-    const { clause: pClause, params: pParams } = periodosClause('v', periodosArr);
-    const porCanalRows = db.prepare(`
-      SELECT canal, COUNT(*) as n FROM (
-        SELECT v.canal as canal, v.cliente_id as cliente_id, SUM(v.um_hl) as hl
-        FROM ventas v ${join}
-        WHERE v.categoria = ?${pClause}${clause}
-        GROUP BY v.canal, v.cliente_id
-        HAVING SUM(v.um_hl) >= 0.0001
-      ) GROUP BY canal
-    `).all(categoria, ...pParams, ...params);
-    const porCanal = {};
-    for (const r of porCanalRows) porCanal[r.canal || 'SIN CANAL'] = r.n;
-    const totalRow = db.prepare(`
-      SELECT COUNT(*) as n FROM (
-        SELECT v.cliente_id FROM ventas v ${join}
-        WHERE v.categoria = ?${pClause}${clause}
-        GROUP BY v.cliente_id HAVING SUM(v.um_hl) >= 0.0001
-      )
-    `).get(categoria, ...pParams, ...params);
-    return { porCanal, total: totalRow.n || 0 };
-  }
-  const totalesActual = compradoresDistintosPorCanal(periodos);
-  const totalesAnioAnt = compradoresDistintosPorCanal(periodosAnioAnterior(periodos));
-  const totalesMesAnt = soloUnMes ? compradoresDistintosPorCanal([{ anio: anioMesAnterior, mes: mesAnteriorNum }]) : { porCanal: {}, total: 0 };
-  const totalGeneral = {
-    porGrupo: {},
-    total: {
-      actual: totalesActual.total,
-      anio_anterior: totalesAnioAnt.total,
-      mes_anterior: soloUnMes ? totalesMesAnt.total : null,
-    },
-  };
-  for (const canal of canales) {
-    totalGeneral.porGrupo[canal] = {
-      actual: totalesActual.porCanal[canal] || 0,
-      anio_anterior: totalesAnioAnt.porCanal[canal] || 0,
-      mes_anterior: soloUnMes ? (totalesMesAnt.porCanal[canal] || 0) : null,
-    };
-  }
-
-  sendJson(res, 200, {
-    periodos, mes_anterior_num: mesAnteriorNum, anio_mes_anterior: anioMesAnterior,
-    grupos: canales, filas, total_general: totalGeneral,
-  });
-});
-
-// Volumen (HL) por ARTICULO para UNA marca de UNA categoria puntual -
-// drill-down al hacer clic en el nombre de una marca dentro de "Volumen por
-// marca y canal". Misma logica de periodo (multi-periodo) y misma forma de
-// columnas (actual / año anterior / [mes anterior], este ultimo solo con un
-// mes seleccionado) que el resto de los endpoints de periodo.
-route('GET', '/api/marca-articulo', async (req, res) => {
-  if (!requireAuth(req, res, ['admin', 'supervisor', 'vendedor'])) return;
-  const parsed = url.parse(req.url, true);
-  const periodos = parsePeriodos(parsed.query);
-  const categoria = parsed.query.categoria || '';
-  const marca = parsed.query.marca || '';
-  if (!periodos.length || !categoria || !marca) return sendJson(res, 400, { error: 'Faltan parametros de periodo, categoria y marca' });
-  const { clause, params, join } = buildFiltros(parsed.query);
-  const soloUnMes = periodos.length === 1;
-  let mesAnteriorNum = null, anioMesAnterior = null;
-  if (soloUnMes) ({ mesAnteriorNum, anioMesAnterior } = periodoMesAnterior(periodos[0].mes, periodos[0].anio));
-  const marcaCase = `CASE WHEN v.marca = 'AMSTEL IPANEMA' THEN 'AMSTEL LAGER' ELSE v.marca END`;
-
-  function volumenPorArticulo(periodosArr) {
-    const { clause: pClause, params: pParams } = periodosClause('v', periodosArr);
-    const rows = db.prepare(`
-      SELECT v.articulo as articulo, SUM(v.um_hl) as hl
-      FROM ventas v ${join}
-      WHERE v.categoria = ? AND ${marcaCase} = ?${pClause}${clause}
-      GROUP BY v.articulo
-    `).all(categoria, marca, ...pParams, ...params);
-    const out = {};
-    for (const r of rows) out[r.articulo || 'SIN ARTICULO'] = r.hl || 0;
-    return out;
-  }
-
-  const actualData = volumenPorArticulo(periodos);
-  const anioAnteriorData = volumenPorArticulo(periodosAnioAnterior(periodos));
-  const mesAnteriorData = soloUnMes ? volumenPorArticulo([{ anio: anioMesAnterior, mes: mesAnteriorNum }]) : {};
-  const articulos = Array.from(new Set([
-    ...Object.keys(actualData), ...Object.keys(anioAnteriorData), ...Object.keys(mesAnteriorData),
-  ])).sort();
-
-  const r3 = (n) => Math.round((n || 0) * 1000) / 1000;
-  function armarFila(articulo) {
-    const a = actualData[articulo] || 0;
-    const aa = anioAnteriorData[articulo] || 0;
-    const ma = mesAnteriorData[articulo] || 0;
-    return { nombre: articulo, actual: r3(a), anio_anterior: r3(aa), mes_anterior: soloUnMes ? r3(ma) : null };
-  }
-
-  const filas = articulos.map(armarFila).sort((a, b) => b.actual - a.actual);
-  let tA = 0, tAA = 0, tMA = 0;
-  for (const f of filas) { tA += f.actual; tAA += f.anio_anterior; if (soloUnMes) tMA += (f.mes_anterior || 0); }
-  const totalGeneral = { actual: r3(tA), anio_anterior: r3(tAA), mes_anterior: soloUnMes ? r3(tMA) : null };
-
-  sendJson(res, 200, {
-    periodos, mes_anterior_num: mesAnteriorNum, anio_mes_anterior: anioMesAnterior,
-    marca, categoria, filas, total_general: totalGeneral,
-  });
-});
-
-// Compradores (clientes distintos) por ARTICULO para UNA marca de UNA
-// categoria puntual - drill-down desde "Compradores por marca y canal".
-// Mismo criterio de conteo directo por SQL que el resto de los endpoints de
-// compradores (nunca sumado por articulo, para no contar 2 veces a un
-// cliente que compro mas de un articulo de la marca).
-route('GET', '/api/marca-articulo-compradores', async (req, res) => {
-  if (!requireAuth(req, res, ['admin', 'supervisor', 'vendedor'])) return;
-  const parsed = url.parse(req.url, true);
-  const periodos = parsePeriodos(parsed.query);
-  const categoria = parsed.query.categoria || '';
-  const marca = parsed.query.marca || '';
-  if (!periodos.length || !categoria || !marca) return sendJson(res, 400, { error: 'Faltan parametros de periodo, categoria y marca' });
-  const { clause, params, join } = buildFiltros(parsed.query);
-  const soloUnMes = periodos.length === 1;
-  let mesAnteriorNum = null, anioMesAnterior = null;
-  if (soloUnMes) ({ mesAnteriorNum, anioMesAnterior } = periodoMesAnterior(periodos[0].mes, periodos[0].anio));
-  const marcaCase = `CASE WHEN v.marca = 'AMSTEL IPANEMA' THEN 'AMSTEL LAGER' ELSE v.marca END`;
-
-  function compradoresPorArticulo(periodosArr) {
-    const { clause: pClause, params: pParams } = periodosClause('v', periodosArr);
-    const rows = db.prepare(`
-      SELECT articulo, COUNT(*) as n FROM (
-        SELECT v.articulo as articulo, v.cliente_id as cliente_id, SUM(v.um_hl) as hl
-        FROM ventas v ${join}
-        WHERE v.categoria = ? AND ${marcaCase} = ?${pClause}${clause}
-        GROUP BY v.articulo, v.cliente_id
-        HAVING SUM(v.um_hl) >= 0.001
-      ) GROUP BY articulo
-    `).all(categoria, marca, ...pParams, ...params);
-    const out = {};
-    for (const r of rows) out[r.articulo || 'SIN ARTICULO'] = r.n;
-    return out;
-  }
-  // Total de la marca (no sumado por articulo, sino contado directo) - un
-  // cliente que compro 2 articulos de la marca cuenta 1 sola vez.
-  function totalMarcaDistintos(periodosArr) {
-    const { clause: pClause, params: pParams } = periodosClause('v', periodosArr);
-    const row = db.prepare(`
-      SELECT COUNT(*) as n FROM (
-        SELECT v.cliente_id FROM ventas v ${join}
-        WHERE v.categoria = ? AND ${marcaCase} = ?${pClause}${clause}
-        GROUP BY v.cliente_id HAVING SUM(v.um_hl) >= 0.001
-      )
-    `).get(categoria, marca, ...pParams, ...params);
-    return row.n || 0;
-  }
-
-  const actualData = compradoresPorArticulo(periodos);
-  const anioAnteriorData = compradoresPorArticulo(periodosAnioAnterior(periodos));
-  const mesAnteriorData = soloUnMes ? compradoresPorArticulo([{ anio: anioMesAnterior, mes: mesAnteriorNum }]) : {};
-  const articulos = Array.from(new Set([
-    ...Object.keys(actualData), ...Object.keys(anioAnteriorData), ...Object.keys(mesAnteriorData),
-  ])).sort();
-
-  function armarFila(articulo) {
-    return {
-      nombre: articulo,
-      actual: actualData[articulo] || 0,
-      anio_anterior: anioAnteriorData[articulo] || 0,
-      mes_anterior: soloUnMes ? (mesAnteriorData[articulo] || 0) : null,
-    };
-  }
-  const filas = articulos.map(armarFila).sort((a, b) => b.actual - a.actual);
-
-  const totalGeneral = {
-    actual: totalMarcaDistintos(periodos),
-    anio_anterior: totalMarcaDistintos(periodosAnioAnterior(periodos)),
-    mes_anterior: soloUnMes ? totalMarcaDistintos([{ anio: anioMesAnterior, mes: mesAnteriorNum }]) : null,
-  };
-
-  sendJson(res, 200, {
-    periodos, mes_anterior_num: mesAnteriorNum, anio_mes_anterior: anioMesAnterior,
-    marca, categoria, filas, total_general: totalGeneral,
-  });
-});
-
-const MIME = {
-  '.html': 'text/html; charset=utf-8',
-  '.js': 'application/javascript; charset=utf-8',
-  '.css': 'text/css; charset=utf-8',
-  '.json': 'application/json; charset=utf-8',
-  '.png': 'image/png',
-  '.svg': 'image/svg+xml',
-  '.webmanifest': 'application/manifest+json',
-};
-function serveStatic(req, res, pathname) {
-  let filePath = path.join(PUBLIC_DIR, pathname === '/' ? 'index.html' : pathname);
-  if (!filePath.startsWith(PUBLIC_DIR)) { res.writeHead(403); res.end(); return; }
-  fs.readFile(filePath, (err, data) => {
-    if (err) {
-      fs.readFile(path.join(PUBLIC_DIR, 'index.html'), (err2, data2) => {
-        if (err2) { res.writeHead(404); res.end('Not found'); return; }
-        res.writeHead(200, { 'Content-Type': MIME['.html'] });
-        res.end(data2);
-      });
-      return;
-    }
-    const ext = path.extname(filePath);
-    res.writeHead(200, { 'Content-Type': MIME[ext] || 'application/octet-stream' });
-    res.end(data);
-  });
-}
-const server = http.createServer(async (req, res) => {
-  const parsed = url.parse(req.url, true);
-  const pathname = parsed.pathname;
-  if (req.method === 'OPTIONS') {
-    res.writeHead(204, {
-      'Access-Control-Allow-Origin': '*',
-      'Access-Control-Allow-Methods': 'GET,POST,DELETE,OPTIONS',
-      'Access-Control-Allow-Headers': 'Content-Type, Authorization',
+    const res = await fetch(API + '/api/referencia/supervisores', {
+      method: 'POST', headers: {'Content-Type':'application/json', ...authHeaders()},
+      body: JSON.stringify({mapping})
     });
-    return res.end();
+    const data = await res.json();
+    if(!res.ok){ showMsg('supRefMsg', data.error || 'Error', false); return; }
+    showMsg('supRefMsg', `Mapeo actualizado: ${data.cantidad} vendedores`, true);
+  }catch(e){
+    showMsg('supRefMsg', 'Error: ' + e.message, false);
   }
-  if (pathname.startsWith('/api/')) {
-    const match = matchRoute(req.method, pathname);
-    if (!match) return sendJson(res, 404, { error: 'Ruta no encontrada' });
-    try {
-      await match.handler(req, res, match.params);
-    } catch (e) {
-      console.error(e);
-      sendJson(res, 500, { error: 'Error interno: ' + e.message });
+}
+
+// Archivo "universo" (maestro de clientes del ERP): a diferencia del archivo
+// de venta del dia, este SI trae clientes nuevos y sus datos (razon social,
+// domicilio, vendedor, dia de visita). Se parsea en el navegador (mismo
+// tamaño de archivo que el mapeo Vendedor-Supervisor, no el de ventas) y se
+// manda como JSON al backend, que hace upsert por cliente_id.
+async function procesarUniverso(){
+  const file = document.getElementById('fileUniverso').files[0];
+  if(!file){ showMsg('universoMsg', 'Elegí un archivo', false); return; }
+  showMsg('universoMsg', 'Leyendo archivo...', true);
+  try{
+    const wb = await readWorkbook(file);
+    const ws = wb.Sheets[wb.SheetNames[0]];
+    const rows = getDenseRows(ws);
+    if(!rows || rows.length < 2) throw new Error('El archivo está vacío o no se pudo leer.');
+    const header = rows[0];
+    const idx = {
+      cliente: findColIndex(header, 'Cliente'),
+      razonSocial: findColIndex(header, 'Razon social'),
+      domicilio: findColIndex(header, 'Domicilio'),
+      vendedor: findColIndex(header, 'Fuerza de venta 1 Descripcion personal comercial'),
+      dia: findColIndex(header, 'Fuerza de venta 1 Dias de visita'),
+    };
+    if(idx.cliente < 0 || idx.razonSocial < 0 || idx.domicilio < 0 || idx.vendedor < 0 || idx.dia < 0){
+      throw new Error('Faltan columnas: Cliente, Razon social, Domicilio, Fuerza de venta 1 Descripcion personal comercial o Fuerza de venta 1 Dias de visita');
     }
+    const clientes = [];
+    for(let r=1;r<rows.length;r++){
+      const row = rows[r];
+      if(!row || row[idx.cliente] === undefined || row[idx.cliente] === null || row[idx.cliente] === '') continue;
+      clientes.push({
+        cliente_id: row[idx.cliente],
+        razon_social: (row[idx.razonSocial]||'').toString().trim(),
+        domicilio: (row[idx.domicilio]||'').toString().trim(),
+        personal_comercial: (row[idx.vendedor]||'').toString().trim(),
+        dias_visita: (row[idx.dia]||'').toString().trim(),
+      });
+    }
+    if(!clientes.length) throw new Error('No se encontraron filas con código de cliente.');
+    showMsg('universoMsg', `Actualizando ${clientes.length} clientes...`, true);
+    const res = await fetch(API + '/api/referencia/universo', {
+      method: 'POST', headers: {'Content-Type':'application/json', ...authHeaders()},
+      body: JSON.stringify({clientes})
+    });
+    const data = await res.json();
+    if(!res.ok){ showMsg('universoMsg', data.error || 'Error', false); return; }
+    showMsg('universoMsg', `Clientes actualizados: ${data.cantidad}`, true);
+  }catch(e){
+    showMsg('universoMsg', 'Error: ' + e.message, false);
+  }
+}
+
+// El archivo se sube CRUDO por partes (ver comentario mas arriba) y se
+// parsea en el servidor con exceljs en modo streaming - no se lee nada en
+// el navegador. Como la subida y el parseo pueden tardar, el servidor
+// responde enseguida al terminar de recibir el archivo y esta funcion
+// consulta el estado hasta que termina.
+async function procesarVentasHoy(){
+  const file = document.getElementById('fileVentasHoy').files[0];
+  if(!file){ showMsg('uploadVentasMsg', 'Elegí un archivo', false); return; }
+  if(/\.xlsb$/i.test(file.name)){
+    showMsg('uploadVentasMsg', 'Error: los archivos .xlsb no se pueden leer directamente. Abrilo en Excel, hace "Archivo > Guardar como > Libro de Excel (.xlsx)" y subi ese archivo.', false);
     return;
   }
-  serveStatic(req, res, pathname);
-});
-(function autoSeed(){
-  const count = db.prepare('SELECT COUNT(*) as n FROM users').get().n;
-  if (count === 0) {
-    authLib.createUser('surdorado', 'luca1901', 'admin');
-    authLib.createUser('vendedores', 'vende2026', 'vendedor');
-    console.log('Auto-seed: usuarios iniciales creados (surdorado / vendedores).');
+  const CHUNK_SIZE = 4 * 1024 * 1024; // 4MB por pedazo
+  try{
+    showMsg('uploadVentasMsg', 'Iniciando subida...', true);
+    const startRes = await fetch(API + '/api/upload-excel/start?filename=' + encodeURIComponent(file.name), { method: 'POST', headers: authHeaders() });
+    const startData = await startRes.json();
+    if(!startRes.ok){ showMsg('uploadVentasMsg', startData.error || 'Error iniciando subida', false); return; }
+    const uploadId = startData.uploadId;
+
+    const totalPartes = Math.ceil(file.size / CHUNK_SIZE) || 1;
+    for(let i = 0; i < totalPartes; i++){
+      const start = i * CHUNK_SIZE;
+      const end = Math.min(start + CHUNK_SIZE, file.size);
+      const chunk = file.slice(start, end);
+      showMsg('uploadVentasMsg', `Subiendo parte ${i+1} de ${totalPartes}...`, true);
+      const chunkRes = await fetch(API + '/api/upload-excel/chunk?uploadId=' + encodeURIComponent(uploadId), {
+        method: 'POST',
+        headers: {'Content-Type':'application/octet-stream', ...authHeaders()},
+        body: chunk
+      });
+      const chunkData = await chunkRes.json();
+      if(!chunkRes.ok){ showMsg('uploadVentasMsg', chunkData.error || `Error subiendo parte ${i+1}`, false); return; }
+    }
+
+    showMsg('uploadVentasMsg', 'Todas las partes subidas. Procesando en el servidor...', true);
+    const finishRes = await fetch(API + '/api/upload-excel/finish?uploadId=' + encodeURIComponent(uploadId), {
+      method: 'POST', headers: authHeaders()
+    });
+    const finishData = await finishRes.json();
+    if(!finishRes.ok){ showMsg('uploadVentasMsg', finishData.error || 'Error procesando', false); return; }
+
+    while(true){
+      await new Promise(r => setTimeout(r, 3000));
+      const statusRes = await fetch(API + '/api/upload-excel/status?uploadId=' + encodeURIComponent(uploadId), { headers: authHeaders() });
+      const data = await statusRes.json();
+      if(!statusRes.ok){ showMsg('uploadVentasMsg', data.error || 'Error procesando', false); return; }
+      if(data.status === 'procesando') continue;
+      showMsg('uploadVentasMsg', `Listo. ${data.mes_actual}: ${data.ventas} filas guardadas.`, true);
+      initPeriodoYKpis();
+      return;
+    }
+  }catch(e){
+    showMsg('uploadVentasMsg', 'Error: ' + e.message, false);
   }
-})();
-server.listen(PORT, () => {
-  console.log(`Servidor escuchando en puerto ${PORT}`);
-});
-module.exports = server;
+}
+
+async function loadCompradores(){
+  if(!CURRENT_PERIODOS.length) return;
+  const area = document.getElementById('compradoresArea');
+  area.innerHTML = '<div class="loading">Cargando...</div>';
+  try{
+    const res = await fetch(API + `/api/kpis-compradores?${periodoQueryString()}${filtrosQueryString()}`, {headers: authHeaders()});
+    const data = await res.json();
+    if(!res.ok){ area.innerHTML = '<div class="loading">' + (data.error||'Error') + '</div>'; return; }
+    renderKpisCompradores(data);
+  }catch(e){
+    area.innerHTML = '<div class="loading">Error: ' + e.message + '</div>';
+  }
+}
+
+// Mismo layout que renderKpis() (Volumen) pero contando clientes compradores
+// distintos en vez de sumar HL. Cada card mantiene el click para ir al
+// listado de clientes de esa categoria (loadCompradoresDrill).
+function renderKpisCompradores(data){
+  const area = document.getElementById('compradoresArea');
+  const cats = ['Cervezas','Aguas','Vinos','Sidras'];
+  const conMesAnterior = data.mes_anterior_num !== null && data.mes_anterior_num !== undefined;
+  let html = '<div class="kpi-grid">';
+  for(const cat of cats){
+    const k = data.categorias[cat] || {};
+    const varPct = k.variacion_pct;
+    let badgeClass = 'neutral', badgeText = 'Sin dato año anterior';
+    if(varPct !== null && varPct !== undefined){
+      badgeClass = varPct >= 0 ? 'up' : 'down';
+      badgeText = (varPct >= 0 ? '+' : '') + varPct + '% vs ' + formatPeriodoLabel(periodosAnioAnterior(data.periodos));
+    }
+    let filaMesAnterior = '';
+    if(conMesAnterior){
+      const varMesPct = k.variacion_mes_pct;
+      let badgeClassMes = 'neutral', badgeTextMes = 'Sin dato mes anterior';
+      if(varMesPct !== null && varMesPct !== undefined){
+        badgeClassMes = varMesPct >= 0 ? 'up' : 'down';
+        badgeTextMes = (varMesPct >= 0 ? '+' : '') + varMesPct + '% vs mes anterior';
+      }
+      filaMesAnterior = `
+        <div class="kpi-row"><span>${NOMBRES_MES[data.mes_anterior_num]} ${data.anio_mes_anterior}</span><span>${fmtInt(k.mes_anterior)}</span></div>
+        <div class="kpi-row"><span>Variación vs mes anterior</span><span class="badge ${badgeClassMes}">${badgeTextMes}</span></div>
+      `;
+    }
+    html += `
+      <div class="kpi-card" style="cursor:pointer;" onclick="loadCompradoresDrill('${cat}')">
+        <h3>${catLabel(cat)}</h3>
+        <div class="kpi-main">${fmtInt(k.actual)}</div>
+        <div class="kpi-sub">Compradores ${formatPeriodoLabel(data.periodos)}</div>
+        <div class="kpi-row"><span>Proyectado</span><span>${k.proyectado !== null ? fmtInt(k.proyectado) : 'Cargar dias configurados'}</span></div>
+        ${filaMesAnterior}
+        <div class="kpi-row"><span>${formatPeriodoLabel(periodosAnioAnterior(data.periodos))}</span><span>${fmtInt(k.anio_anterior)}</span></div>
+        <div class="kpi-row"><span>Variación vs año anterior</span><span class="badge ${badgeClass}">${badgeText}</span></div>
+      </div>
+    `;
+  }
+  html += '</div>';
+  html += `<p class="note">Días de venta transcurridos: ${data.dias_venta_reales ?? '-'} · Días configurados: ${data.dias_configurados ?? '-'}</p>`;
+  area.innerHTML = html;
+}
+
+async function loadCompradoresDrill(categoria){
+  document.getElementById('compradoresSection').classList.add('hidden');
+  const section = document.getElementById('compradoresDrillSection');
+  const body = document.getElementById('compradoresDrillBody');
+  document.getElementById('compradoresDrillTitle').textContent = `Clientes que compraron ${catLabel(categoria)}`;
+  section.classList.remove('hidden');
+  body.innerHTML = '<tr><td colspan="4" style="padding:10px;">Cargando...</td></tr>';
+  try{
+    const res = await fetch(API + `/api/ranking/clientes-categoria?${periodoQueryString()}&categoria=${encodeURIComponent(categoria)}&limit=500${filtrosQueryString()}`, {headers: authHeaders()});
+    const rows = await res.json();
+    if(!res.ok){ body.innerHTML = '<tr><td colspan="4">' + (rows.error||'Error') + '</td></tr>'; return; }
+    if(!rows.length){ body.innerHTML = '<tr><td colspan="4" style="padding:10px;">Sin compradores de esta categoría en este período.</td></tr>'; return; }
+    body.innerHTML = rows.map(r => `
+      <tr style="border-bottom:1px solid var(--border);">
+        <td style="padding:6px;">${r.cliente_id}</td>
+        <td style="padding:6px;">${r.razon_social}</td>
+        <td style="padding:6px;">${r.domicilio}</td>
+        <td style="padding:6px; text-align:right;">${fmtHL(r.hl)}</td>
+      </tr>
+    `).join('');
+  }catch(e){
+    body.innerHTML = '<tr><td colspan="4">Error: ' + e.message + '</td></tr>';
+  }
+}
+
+function volverCompradores(){
+  document.getElementById('compradoresDrillSection').classList.add('hidden');
+  document.getElementById('compradoresSection').classList.remove('hidden');
+}
+
+let TOP_CLIENTES_CATEGORIA = [];
+async function loadTopClientesCategoria(){
+  if(!CURRENT_PERIODOS.length) return;
+  const categoria = document.getElementById('catTopClientesSelect').value;
+  const limit = document.getElementById('limitTopClientesSelect').value;
+  const body = document.getElementById('topClientesBody');
+  body.innerHTML = '<tr><td colspan="4" style="padding:10px;">Cargando...</td></tr>';
+  try{
+    const res = await fetch(API + `/api/ranking/clientes-categoria?${periodoQueryString()}&categoria=${encodeURIComponent(categoria)}&limit=${limit}${filtrosQueryString()}`, {headers: authHeaders()});
+    const rows = await res.json();
+    if(!res.ok){ body.innerHTML = '<tr><td colspan="4">' + (rows.error||'Error') + '</td></tr>'; return; }
+    TOP_CLIENTES_CATEGORIA = rows;
+    if(!rows.length){ body.innerHTML = '<tr><td colspan="4" style="padding:10px;">Sin datos para esta categoría en este período.</td></tr>'; return; }
+    body.innerHTML = rows.map(r => `
+      <tr style="border-bottom:1px solid var(--border);">
+        <td style="padding:6px;">${r.cliente_id}</td>
+        <td style="padding:6px;">${r.razon_social}</td>
+        <td style="padding:6px;">${r.domicilio}</td>
+        <td style="padding:6px; text-align:right;">${fmtHL(r.hl)}</td>
+      </tr>
+    `).join('');
+  }catch(e){
+    body.innerHTML = '<tr><td colspan="4">Error: ' + e.message + '</td></tr>';
+  }
+}
+
+function exportarTopClientesExcel(){
+  if(!TOP_CLIENTES_CATEGORIA.length){ alert('No hay datos para exportar.'); return; }
+  const data = TOP_CLIENTES_CATEGORIA.map(r => ({
+    'Código': r.cliente_id, 'Razón social': r.razon_social, 'Domicilio': r.domicilio, 'HL': r.hl,
+  }));
+  const ws = XLSX.utils.json_to_sheet(data);
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, 'Top Clientes');
+  XLSX.writeFile(wb, 'top_clientes_categoria.xlsx');
+}
+
+async function loadDiasConfig(){
+  try{
+    const res = await fetch(API + '/api/config/dias', {headers: authHeaders()});
+    const data = await res.json();
+    if(data.dias_configurados) document.getElementById('diasConfigInput').value = data.dias_configurados;
+  }catch(e){}
+}
+
+async function saveDiasConfig(){
+  const dias = Number(document.getElementById('diasConfigInput').value);
+  if(!dias){ showMsg('diasConfigMsg', 'Ingresa un numero valido', false); return; }
+  try{
+    const res = await fetch(API + '/api/config/dias', {
+      method: 'POST', headers: {'Content-Type':'application/json', ...authHeaders()},
+      body: JSON.stringify({dias})
+    });
+    const data = await res.json();
+    if(!res.ok){ showMsg('diasConfigMsg', data.error || 'Error', false); return; }
+    showMsg('diasConfigMsg', 'Guardado correctamente', true);
+    loadKpis();
+  }catch(e){
+    showMsg('diasConfigMsg', 'Error: ' + e.message, false);
+  }
+}
+
+// Cambio de la propia contraseña - disponible para cualquier usuario logueado
+// (admin o supervisor). Pide la contraseña actual para confirmar identidad.
+async function cambiarMiPassword(){
+  const actual = document.getElementById('passActual').value;
+  const nueva = document.getElementById('passNueva').value;
+  if(!actual || !nueva){ showMsg('cambiarPassMsg', 'Completa ambos campos', false); return; }
+  try{
+    const res = await fetch(API + '/api/me/change-password', {
+      method: 'POST', headers: {'Content-Type':'application/json', ...authHeaders()},
+      body: JSON.stringify({currentPassword: actual, newPassword: nueva})
+    });
+    const data = await res.json();
+    if(!res.ok){ showMsg('cambiarPassMsg', data.error || 'Error', false); return; }
+    showMsg('cambiarPassMsg', 'Contraseña actualizada', true);
+    document.getElementById('passActual').value = '';
+    document.getElementById('passNueva').value = '';
+  }catch(e){
+    showMsg('cambiarPassMsg', 'Error: ' + e.message, false);
+  }
+}
+
+// Gestion de usuarios - solo admin. Restablecer contraseña usa prompt() para
+// no tener que armar un modal aparte; es consistente con el resto de la app
+// (los mensajes de validacion ya usan alert()/confirm() en varios lados).
+async function loadUsuarios(){
+  const body = document.getElementById('usersBody');
+  body.innerHTML = '<tr><td colspan="3" style="padding:10px;">Cargando...</td></tr>';
+  try{
+    const res = await fetch(API + '/api/admin/users', {headers: authHeaders()});
+    const rows = await res.json();
+    if(!res.ok){ body.innerHTML = '<tr><td colspan="3">' + (rows.error||'Error') + '</td></tr>'; return; }
+    if(!rows.length){ body.innerHTML = '<tr><td colspan="3" style="padding:10px;">Sin usuarios.</td></tr>'; return; }
+    body.innerHTML = rows.map(u => `
+      <tr style="border-bottom:1px solid var(--border);">
+        <td style="padding:6px;">${u.username}</td>
+        <td style="padding:6px;">${u.role}</td>
+        <td style="padding:6px; text-align:right; white-space:nowrap;">
+          <button onclick="resetPasswordUsuario(${u.id}, '${u.username.replace(/'/g,"\\'")}')" style="background:transparent; border:1px solid var(--border); color:var(--text2); padding:4px 8px; border-radius:6px; cursor:pointer; font-size:12px; margin-right:6px;">Restablecer contraseña</button>
+          <button onclick="borrarUsuario(${u.id}, '${u.username.replace(/'/g,"\\'")}')" style="background:transparent; border:1px solid var(--bad); color:var(--bad); padding:4px 8px; border-radius:6px; cursor:pointer; font-size:12px;">Borrar</button>
+        </td>
+      </tr>
+    `).join('');
+  }catch(e){
+    body.innerHTML = '<tr><td colspan="3">Error: ' + e.message + '</td></tr>';
+  }
+}
+
+async function crearUsuario(){
+  const username = document.getElementById('nuevoUserUsername').value.trim();
+  const password = document.getElementById('nuevoUserPassword').value;
+  const role = document.getElementById('nuevoUserRole').value;
+  if(!username || !password){ showMsg('usersMsg', 'Completa usuario y contraseña', false); return; }
+  try{
+    const res = await fetch(API + '/api/admin/users', {
+      method: 'POST', headers: {'Content-Type':'application/json', ...authHeaders()},
+      body: JSON.stringify({username, password, role})
+    });
+    const data = await res.json();
+    if(!res.ok){ showMsg('usersMsg', data.error || 'Error', false); return; }
+    showMsg('usersMsg', `Usuario "${username}" creado`, true);
+    document.getElementById('nuevoUserUsername').value = '';
+    document.getElementById('nuevoUserPassword').value = '';
+    loadUsuarios();
+  }catch(e){
+    showMsg('usersMsg', 'Error: ' + e.message, false);
+  }
+}
+
+async function resetPasswordUsuario(id, username){
+  const nueva = prompt(`Nueva contraseña para "${username}":`);
+  if(!nueva) return;
+  try{
+    const res = await fetch(API + `/api/admin/users/${id}/reset-password`, {
+      method: 'POST', headers: {'Content-Type':'application/json', ...authHeaders()},
+      body: JSON.stringify({password: nueva})
+    });
+    const data = await res.json();
+    if(!res.ok){ showMsg('usersMsg', data.error || 'Error', false); return; }
+    showMsg('usersMsg', `Contraseña de "${username}" actualizada`, true);
+  }catch(e){
+    showMsg('usersMsg', 'Error: ' + e.message, false);
+  }
+}
+
+async function borrarUsuario(id, username){
+  if(!confirm(`¿Borrar el usuario "${username}"?`)) return;
+  try{
+    const res = await fetch(API + `/api/admin/users/${id}`, { method: 'DELETE', headers: authHeaders() });
+    const data = await res.json();
+    if(!res.ok){ showMsg('usersMsg', data.error || 'Error', false); return; }
+    showMsg('usersMsg', `Usuario "${username}" borrado`, true);
+    loadUsuarios();
+  }catch(e){
+    showMsg('usersMsg', 'Error: ' + e.message, false);
+  }
+}
+</script>
+</body>
+</html>
