@@ -250,6 +250,109 @@ route('GET', '/api/cliente/:id/marca/:marca', async (req, res, params) => {
   `).all(params.id, params.marca, ...periodoParams);
   sendJson(res, 200, rows);
 });
+
+const NOMBRES_MES_HIST = ['', 'Enero', 'Febrero', 'Marzo', 'Abril', 'Mayo', 'Junio', 'Julio', 'Agosto', 'Septiembre', 'Octubre', 'Noviembre', 'Diciembre'];
+
+// Historico de un cliente para la app de vendedores: compara el mes en curso
+// (el ultimo periodo cargado) contra el mes calendario anterior, marca por
+// marca dentro de cada categoria. La lista de marcas es la union de lo
+// comprado en CUALQUIERA de los 2 periodos (no solo "lo que compro el mes
+// pasado"), para que una marca nueva este mes tambien aparezca con su HL
+// actual aunque el mes pasado haya sido 0. Mismo filtro de camioneros
+// excluidos que el resto de la app de vendedores (ver CAMIONEROS_EXCLUIDOS_APP).
+route('GET', '/api/cliente/:id/historico', async (req, res, params) => {
+  if (!requireAuth(req, res, ['admin', 'supervisor', 'vendedor'])) return;
+  const { mes, anio } = getPeriodoActual();
+  if (!mes || !anio) return sendJson(res, 400, { error: 'Todavia no hay un periodo cargado' });
+  const { mesAnteriorNum, anioMesAnterior } = periodoMesAnterior(mes, anio);
+  const exclClause = camioneroExcluidoClause(null);
+
+  function marcasPorPeriodo(mesP, anioP) {
+    return db.prepare(`
+      SELECT categoria, marca, SUM(um_hl) as hl FROM ventas
+      WHERE cliente_id = ? AND mes = ? AND anio = ?${exclClause}
+      GROUP BY categoria, marca HAVING SUM(um_hl) >= 0.001
+    `).all(params.id, mesP, anioP, ...CAMIONEROS_EXCLUIDOS_APP);
+  }
+  function totalPorCategoria(mesP, anioP) {
+    const rows = db.prepare(`
+      SELECT categoria, SUM(um_hl) as hl FROM ventas
+      WHERE cliente_id = ? AND mes = ? AND anio = ?${exclClause}
+      GROUP BY categoria
+    `).all(params.id, mesP, anioP, ...CAMIONEROS_EXCLUIDOS_APP);
+    const out = {};
+    for (const r of rows) out[r.categoria] = r.hl || 0;
+    return out;
+  }
+
+  const actualRows = marcasPorPeriodo(mes, anio);
+  const anteriorRows = marcasPorPeriodo(mesAnteriorNum, anioMesAnterior);
+  const totalActual = totalPorCategoria(mes, anio);
+  const totalAnterior = totalPorCategoria(mesAnteriorNum, anioMesAnterior);
+
+  const CATS = ['Cervezas', 'Aguas', 'Vinos', 'Sidras'];
+  const porCategoria = {};
+  for (const cat of CATS) porCategoria[cat] = { marcas: {}, total_actual: Math.round((totalActual[cat] || 0) * 1000) / 1000, total_anterior: Math.round((totalAnterior[cat] || 0) * 1000) / 1000 };
+  for (const r of actualRows) {
+    if (!porCategoria[r.categoria]) continue;
+    if (!porCategoria[r.categoria].marcas[r.marca]) porCategoria[r.categoria].marcas[r.marca] = { marca: r.marca, hl_actual: 0, hl_anterior: 0 };
+    porCategoria[r.categoria].marcas[r.marca].hl_actual = Math.round((r.hl || 0) * 1000) / 1000;
+  }
+  for (const r of anteriorRows) {
+    if (!porCategoria[r.categoria]) continue;
+    if (!porCategoria[r.categoria].marcas[r.marca]) porCategoria[r.categoria].marcas[r.marca] = { marca: r.marca, hl_actual: 0, hl_anterior: 0 };
+    porCategoria[r.categoria].marcas[r.marca].hl_anterior = Math.round((r.hl || 0) * 1000) / 1000;
+  }
+
+  const resultado = {};
+  for (const cat of CATS) {
+    const marcas = Object.values(porCategoria[cat].marcas).sort((a, b) => b.hl_anterior - a.hl_anterior || b.hl_actual - a.hl_actual);
+    resultado[cat] = { marcas, total_actual: porCategoria[cat].total_actual, total_anterior: porCategoria[cat].total_anterior };
+  }
+
+  sendJson(res, 200, {
+    mes_actual: mes, anio_actual: anio, nombre_mes_actual: NOMBRES_MES_HIST[mes],
+    mes_anterior: mesAnteriorNum, anio_mes_anterior: anioMesAnterior, nombre_mes_anterior: NOMBRES_MES_HIST[mesAnteriorNum],
+    categorias: resultado,
+  });
+});
+
+// Desglose por articulo de UNA marca de un cliente, mismo mes actual vs mes
+// anterior que /api/cliente/:id/historico - drill-down al tocar una marca en
+// la pantalla de historico de la app de vendedores.
+route('GET', '/api/cliente/:id/historico/marca/:marca', async (req, res, params) => {
+  if (!requireAuth(req, res, ['admin', 'supervisor', 'vendedor'])) return;
+  const { mes, anio } = getPeriodoActual();
+  if (!mes || !anio) return sendJson(res, 400, { error: 'Todavia no hay un periodo cargado' });
+  const { mesAnteriorNum, anioMesAnterior } = periodoMesAnterior(mes, anio);
+  const exclClause = camioneroExcluidoClause(null);
+
+  function articulosPorPeriodo(mesP, anioP) {
+    const rows = db.prepare(`
+      SELECT articulo, SUM(um_hl) as hl FROM ventas
+      WHERE cliente_id = ? AND marca = ? AND mes = ? AND anio = ?${exclClause}
+      GROUP BY articulo HAVING SUM(um_hl) >= 0.001
+    `).all(params.id, params.marca, mesP, anioP, ...CAMIONEROS_EXCLUIDOS_APP);
+    const out = {};
+    for (const r of rows) out[r.articulo || 'SIN ARTICULO'] = r.hl || 0;
+    return out;
+  }
+  const actual = articulosPorPeriodo(mes, anio);
+  const anterior = articulosPorPeriodo(mesAnteriorNum, anioMesAnterior);
+  const articulos = Array.from(new Set([...Object.keys(actual), ...Object.keys(anterior)]));
+  const filas = articulos.map(a => ({
+    articulo: a,
+    hl_actual: Math.round((actual[a] || 0) * 1000) / 1000,
+    hl_anterior: Math.round((anterior[a] || 0) * 1000) / 1000,
+  })).sort((x, y) => y.hl_anterior - x.hl_anterior || y.hl_actual - x.hl_actual);
+
+  sendJson(res, 200, {
+    marca: params.marca,
+    mes_actual: mes, anio_actual: anio, nombre_mes_actual: NOMBRES_MES_HIST[mes],
+    mes_anterior: mesAnteriorNum, anio_mes_anterior: anioMesAnterior, nombre_mes_anterior: NOMBRES_MES_HIST[mesAnteriorNum],
+    filas,
+  });
+});
 function guardarVentas({ clientes, ventas, mes_actual, mes, anio, dias_venta_reales }) {
   if (!Array.isArray(clientes) || !Array.isArray(ventas)) {
     throw new Error('Formato invalido: se esperaba {clientes:[], ventas:[]}');
@@ -1036,6 +1139,39 @@ route('GET', '/api/ranking/marcas', async (req, res) => {
     ORDER BY hl DESC
   `).all(categoria, ...pParams, ...params);
   sendJson(res, 200, rows.map(r => ({ marca: r.marca, hl: Math.round(r.hl * 1000) / 1000 })));
+});
+// Cantidad de compradores (clientes distintos) por marca, para UNA categoria -
+// version "compradores" de /api/ranking/marcas (que suma HL). El total de la
+// categoria NO es la suma de compradores de cada marca (un cliente que
+// compro 2 marcas no se cuenta 2 veces): se cuenta aparte, directo por SQL,
+// con el mismo umbral 0.0001 que usa la tarjeta de Compradores
+// (/api/kpis-compradores) para que el numero coincida.
+route('GET', '/api/ranking/marcas-compradores', async (req, res) => {
+  if (!requireAuth(req, res, ['admin', 'supervisor', 'vendedor'])) return;
+  const parsed = url.parse(req.url, true);
+  const periodos = parsePeriodos(parsed.query);
+  const categoria = parsed.query.categoria || '';
+  if (!periodos.length || !categoria) return sendJson(res, 400, { error: 'Faltan parametros de periodo y categoria' });
+  const { clause, params, join } = buildFiltros(parsed.query);
+  const { clause: pClause, params: pParams } = periodosClause('v', periodos);
+  const filas = db.prepare(`
+    SELECT marca, COUNT(*) as n FROM (
+      SELECT v.marca as marca, v.cliente_id as cliente_id, SUM(v.um_hl) as hl
+      FROM ventas v ${join}
+      WHERE v.categoria = ?${pClause}${clause}
+      GROUP BY v.marca, v.cliente_id
+      HAVING SUM(v.um_hl) >= 0.001
+    ) GROUP BY marca
+    ORDER BY n DESC
+  `).all(categoria, ...pParams, ...params);
+  const totalRow = db.prepare(`
+    SELECT COUNT(*) as n FROM (
+      SELECT v.cliente_id FROM ventas v ${join}
+      WHERE v.categoria = ?${pClause}${clause}
+      GROUP BY v.cliente_id HAVING SUM(v.um_hl) >= 0.0001
+    )
+  `).get(categoria, ...pParams, ...params);
+  sendJson(res, 200, { filas: filas.map(r => ({ marca: r.marca, n: r.n })), total: totalRow.n || 0 });
 });
 route('GET', '/api/ranking/clientes', async (req, res) => {
   if (!requireAuth(req, res, ['admin', 'supervisor', 'vendedor'])) return;
