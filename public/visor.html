@@ -304,6 +304,38 @@
     </div>
 
     <div class="section">
+      <h2>Ranking de marcas (compradores)</h2>
+      <div class="config-row" style="margin-bottom:14px;">
+        <label>Categoría:</label>
+        <select id="catRankingCompSelect" onchange="loadRankingMarcasCompradores()">
+          <option value="Cervezas">🍺 Cervezas</option>
+          <option value="Aguas">💧 Aguas</option>
+          <option value="Vinos">🍷 Vinos</option>
+          <option value="Sidras">🍎 Sidras</option>
+        </select>
+      </div>
+      <div id="rankingCompArea"><div class="loading">Elegí "Ver" arriba para cargar el ranking.</div></div>
+    </div>
+
+    <div class="section" id="drillDownCompSection" style="display:none;">
+      <h2 id="drillDownCompTitle">Top clientes</h2>
+      <button onclick="exportarClientesCompradoresExcel()" style="background:var(--bordo); color:#fff; border:none; padding:7px 14px; border-radius:6px; cursor:pointer; font-size:13px; margin-bottom:12px;">Exportar a Excel</button>
+      <div style="overflow-x:auto;">
+        <table style="width:100%; border-collapse:collapse; font-size:13px;">
+          <thead>
+            <tr style="text-align:left; color:var(--text2); border-bottom:1px solid var(--border);">
+              <th style="padding:6px;">Código</th>
+              <th style="padding:6px;">Razón social</th>
+              <th style="padding:6px;">Domicilio</th>
+              <th style="padding:6px; text-align:right;">HL</th>
+            </tr>
+          </thead>
+          <tbody id="drillDownCompBody"></tbody>
+        </table>
+      </div>
+    </div>
+
+    <div class="section">
       <h2>Compradores por canal</h2>
       <div style="overflow-x:auto;">
         <table style="width:100%; border-collapse:collapse; font-size:12px; white-space:nowrap;" id="canalCompradoresTable">
@@ -609,6 +641,7 @@ async function loadKpis(){
     if(!res.ok){ document.getElementById('kpiArea').innerHTML = '<div class="loading">' + (data.error||'Error') + '</div>'; return; }
     renderKpis(data);
     loadRankingMarcas();
+    loadRankingMarcasCompradores();
     loadCompradores();
     loadTopClientesCategoria();
     loadCanalVolumen();
@@ -941,7 +974,7 @@ function renderKpis(data){
   }
 }
 
-let CURRENT_PERIODOS = [], CURRENT_DRILLDOWN = [], DEFAULT_PERIODO = null;
+let CURRENT_PERIODOS = [], CURRENT_DRILLDOWN = [], CURRENT_DRILLDOWN_COMP = [], DEFAULT_PERIODO = null;
 
 async function loadRankingMarcas(){
   if(!CURRENT_PERIODOS.length) return;
@@ -954,8 +987,22 @@ async function loadRankingMarcas(){
     const rows = await res.json();
     if(!res.ok){ area.innerHTML = '<div class="loading">' + (rows.error||'Error') + '</div>'; return; }
     if(!rows.length){ area.innerHTML = '<div class="loading">Sin datos para esta categoría en este período.</div>'; return; }
-    const max = rows[0].hl;
-    let html = '';
+    // "Total {categoria}" es la suma de HL de todas las marcas del ranking -
+    // se agrega como primera barra, con otro color para distinguirla, y al
+    // hacer clic lleva al ranking de CLIENTES de toda la categoria (no de una
+    // marca sola): un cliente que compro varias marcas cuenta 1 sola vez.
+    const totalHl = rows.reduce((acc, r) => acc + (r.hl || 0), 0);
+    const max = Math.max(totalHl, rows[0].hl);
+    let html = `
+      <div style="margin-bottom:14px; cursor:pointer;" onclick="loadDrillDownTotal('${categoria}')">
+        <div style="display:flex; justify-content:space-between; font-size:13px; margin-bottom:3px; font-weight:700;">
+          <span>Total ${categoria}</span><span>${fmtHL(totalHl)}</span>
+        </div>
+        <div style="background:var(--card2); border-radius:4px; height:10px; overflow:hidden;">
+          <div style="background:var(--bordo2); height:100%; width:${max > 0 ? (totalHl / max * 100) : 0}%;"></div>
+        </div>
+      </div>
+    `;
     for(const r of rows){
       const pct = max > 0 ? (r.hl / max * 100) : 0;
       html += `
@@ -969,10 +1016,39 @@ async function loadRankingMarcas(){
         </div>
       `;
     }
-    html += '<p class="note">Hacé clic en una marca para ver el top 15 de clientes.</p>';
+    html += '<p class="note">Hacé clic en una marca (o en "Total") para ver el top 15 de clientes.</p>';
     area.innerHTML = html;
   }catch(e){
     area.innerHTML = '<div class="loading">Error: ' + e.message + '</div>';
+  }
+}
+
+// Ranking de clientes de TODA la categoria (todas las marcas juntas), para el
+// clic en "Total {categoria}" del ranking de marcas. Reusa /api/ranking/
+// clientes-categoria (ya cuenta cada cliente 1 sola vez aunque compre varias
+// marcas) con el mismo limite (15) que el drill-down por marca.
+async function loadDrillDownTotal(categoria){
+  const section = document.getElementById('drillDownSection');
+  const body = document.getElementById('drillDownBody');
+  document.getElementById('drillDownTitle').textContent = `Top clientes - Total ${categoria}`;
+  section.style.display = 'block';
+  body.innerHTML = '<tr><td colspan="4" style="padding:10px;">Cargando...</td></tr>';
+  try{
+    const res = await fetch(API + `/api/ranking/clientes-categoria?${periodoQueryString()}&categoria=${encodeURIComponent(categoria)}&limit=15${filtrosQueryString()}`, {headers: authHeaders()});
+    const rows = await res.json();
+    if(!res.ok){ body.innerHTML = '<tr><td colspan="4">' + (rows.error||'Error') + '</td></tr>'; return; }
+    CURRENT_DRILLDOWN = rows;
+    body.innerHTML = rows.map(r => `
+      <tr style="border-bottom:1px solid var(--border);">
+        <td style="padding:6px;">${r.cliente_id}</td>
+        <td style="padding:6px;">${r.razon_social}</td>
+        <td style="padding:6px;">${r.domicilio}</td>
+        <td style="padding:6px; text-align:right;">${fmtHL(r.hl)}</td>
+      </tr>
+    `).join('');
+    section.scrollIntoView({behavior:'smooth', block:'nearest'});
+  }catch(e){
+    body.innerHTML = '<tr><td colspan="4">Error: ' + e.message + '</td></tr>';
   }
 }
 
@@ -1010,6 +1086,124 @@ function exportarClientesExcel(){
   const wb = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(wb, ws, 'Clientes');
   XLSX.writeFile(wb, 'ranking_clientes.xlsx');
+}
+
+// Version "compradores" del ranking de marcas (tab Compradores): misma forma
+// visual que loadRankingMarcas, pero las barras son cantidad de clientes
+// distintos que compraron cada marca (no HL), y la fila "Total {categoria}"
+// es la cantidad de clientes distintos que compraron CUALQUIER marca de la
+// categoria (no la suma de compradores de cada marca - un cliente que
+// compro 2 marcas no se cuenta 2 veces). La calcula el backend
+// (/api/ranking/marcas-compradores) para no duplicar esa logica en el frontend.
+async function loadRankingMarcasCompradores(){
+  if(!CURRENT_PERIODOS.length) return;
+  const categoria = document.getElementById('catRankingCompSelect').value;
+  const area = document.getElementById('rankingCompArea');
+  area.innerHTML = '<div class="loading">Cargando ranking...</div>';
+  document.getElementById('drillDownCompSection').style.display = 'none';
+  try{
+    const res = await fetch(API + `/api/ranking/marcas-compradores?${periodoQueryString()}&categoria=${encodeURIComponent(categoria)}${filtrosQueryString()}`, {headers: authHeaders()});
+    const data = await res.json();
+    if(!res.ok){ area.innerHTML = '<div class="loading">' + (data.error||'Error') + '</div>'; return; }
+    const filas = data.filas || [];
+    if(!filas.length && !data.total){ area.innerHTML = '<div class="loading">Sin datos para esta categoría en este período.</div>'; return; }
+    const max = Math.max(data.total, filas.length ? filas[0].n : 0);
+    let html = `
+      <div style="margin-bottom:14px; cursor:pointer;" onclick="loadDrillDownTotalComp('${categoria}')">
+        <div style="display:flex; justify-content:space-between; font-size:13px; margin-bottom:3px; font-weight:700;">
+          <span>Total ${categoria}</span><span>${fmtInt(data.total)}</span>
+        </div>
+        <div style="background:var(--card2); border-radius:4px; height:10px; overflow:hidden;">
+          <div style="background:var(--bordo2); height:100%; width:${max > 0 ? (data.total / max * 100) : 0}%;"></div>
+        </div>
+      </div>
+    `;
+    for(const r of filas){
+      const pct = max > 0 ? (r.n / max * 100) : 0;
+      html += `
+        <div style="margin-bottom:10px; cursor:pointer;" onclick="loadDrillDownComp('${categoria}', '${r.marca.replace(/'/g,"\\'")}')">
+          <div style="display:flex; justify-content:space-between; font-size:13px; margin-bottom:3px;">
+            <span>${r.marca}</span><span style="color:var(--text2);">${fmtInt(r.n)}</span>
+          </div>
+          <div style="background:var(--card2); border-radius:4px; height:10px; overflow:hidden;">
+            <div style="background:var(--dorado); height:100%; width:${pct}%;"></div>
+          </div>
+        </div>
+      `;
+    }
+    html += '<p class="note">Hacé clic en una marca (o en "Total") para ver el top 15 de clientes.</p>';
+    area.innerHTML = html;
+  }catch(e){
+    area.innerHTML = '<div class="loading">Error: ' + e.message + '</div>';
+  }
+}
+
+// Clientes que compraron UNA marca puntual (clic en una barra del ranking de
+// compradores) - misma data que loadDrillDown (Volumen) pero renderizada en
+// la seccion propia de la tab Compradores (drillDownCompSection), para no
+// pisar el drill-down de la tab Volumen.
+async function loadDrillDownComp(categoria, marca){
+  const section = document.getElementById('drillDownCompSection');
+  const body = document.getElementById('drillDownCompBody');
+  document.getElementById('drillDownCompTitle').textContent = `Top clientes - ${marca} (${categoria})`;
+  section.style.display = 'block';
+  body.innerHTML = '<tr><td colspan="4" style="padding:10px;">Cargando...</td></tr>';
+  try{
+    const res = await fetch(API + `/api/ranking/clientes?${periodoQueryString()}&categoria=${encodeURIComponent(categoria)}&marca=${encodeURIComponent(marca)}${filtrosQueryString()}`, {headers: authHeaders()});
+    const rows = await res.json();
+    if(!res.ok){ body.innerHTML = '<tr><td colspan="4">' + (rows.error||'Error') + '</td></tr>'; return; }
+    CURRENT_DRILLDOWN_COMP = rows;
+    body.innerHTML = rows.map(r => `
+      <tr style="border-bottom:1px solid var(--border);">
+        <td style="padding:6px;">${r.cliente_id}</td>
+        <td style="padding:6px;">${r.razon_social}</td>
+        <td style="padding:6px;">${r.domicilio}</td>
+        <td style="padding:6px; text-align:right;">${fmtHL(r.hl)}</td>
+      </tr>
+    `).join('');
+    section.scrollIntoView({behavior:'smooth', block:'nearest'});
+  }catch(e){
+    body.innerHTML = '<tr><td colspan="4">Error: ' + e.message + '</td></tr>';
+  }
+}
+
+// Clientes de TODA la categoria (clic en "Total {categoria}" del ranking de
+// compradores) - misma idea que loadDrillDownTotal pero para la seccion de
+// la tab Compradores.
+async function loadDrillDownTotalComp(categoria){
+  const section = document.getElementById('drillDownCompSection');
+  const body = document.getElementById('drillDownCompBody');
+  document.getElementById('drillDownCompTitle').textContent = `Top clientes - Total ${categoria}`;
+  section.style.display = 'block';
+  body.innerHTML = '<tr><td colspan="4" style="padding:10px;">Cargando...</td></tr>';
+  try{
+    const res = await fetch(API + `/api/ranking/clientes-categoria?${periodoQueryString()}&categoria=${encodeURIComponent(categoria)}&limit=15${filtrosQueryString()}`, {headers: authHeaders()});
+    const rows = await res.json();
+    if(!res.ok){ body.innerHTML = '<tr><td colspan="4">' + (rows.error||'Error') + '</td></tr>'; return; }
+    CURRENT_DRILLDOWN_COMP = rows;
+    body.innerHTML = rows.map(r => `
+      <tr style="border-bottom:1px solid var(--border);">
+        <td style="padding:6px;">${r.cliente_id}</td>
+        <td style="padding:6px;">${r.razon_social}</td>
+        <td style="padding:6px;">${r.domicilio}</td>
+        <td style="padding:6px; text-align:right;">${fmtHL(r.hl)}</td>
+      </tr>
+    `).join('');
+    section.scrollIntoView({behavior:'smooth', block:'nearest'});
+  }catch(e){
+    body.innerHTML = '<tr><td colspan="4">Error: ' + e.message + '</td></tr>';
+  }
+}
+
+function exportarClientesCompradoresExcel(){
+  if(!CURRENT_DRILLDOWN_COMP.length){ alert('No hay datos para exportar.'); return; }
+  const data = CURRENT_DRILLDOWN_COMP.map(r => ({
+    'Código': r.cliente_id, 'Razón social': r.razon_social, 'Domicilio': r.domicilio, 'HL': r.hl,
+  }));
+  const ws = XLSX.utils.json_to_sheet(data);
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, 'Clientes');
+  XLSX.writeFile(wb, 'ranking_clientes_compradores.xlsx');
 }
 
 // Lista completa de vendedores (sin filtrar por supervisor) y el mapeo
