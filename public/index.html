@@ -12,6 +12,7 @@
     --bg:#16233d; --panel:#1e3050; --panel2:#182642; --border:#2f4468;
     --text:#eef2f9; --text2:#aab6cc; --text3:#7c8aa8;
     --cerveza:#eb6834; --agua:#2a78d6; --vinos:#e87ba4; --sidras:#eda100;
+    --ok:#4caf6a; --bad:#e05a5a;
   }
   *{box-sizing:border-box;}
   body{margin:0; background:var(--bg); color:var(--text); font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif; -webkit-tap-highlight-color:transparent;}
@@ -79,6 +80,24 @@
   .art-row .aname{font-size:14px;}
   .art-row .ahl{font-weight:700; font-size:14px;}
   .loading{text-align:center; padding:30px; color:var(--text3);}
+  .hist-btn{background:none; border:1px solid var(--border); color:var(--text); font-size:12.5px; padding:6px 12px; border-radius:20px; cursor:pointer; white-space:nowrap;}
+  .hist-badge{font-size:11px; font-weight:800; padding:2px 7px; border-radius:10px; margin-left:6px; vertical-align:middle;}
+  .hist-badge.hist-up{background:rgba(76,175,106,.18); color:var(--ok);}
+  .hist-badge.hist-down{background:rgba(224,90,90,.18); color:var(--bad);}
+  .hist-chart-row{display:flex; align-items:center; gap:16px; margin-bottom:12px; flex-wrap:wrap;}
+  .donut{width:84px; height:84px; flex-shrink:0;}
+  .hist-legend{flex:1; min-width:150px;}
+  .hist-legend-row{display:flex; align-items:center; gap:7px; font-size:12.5px; color:var(--text2); padding:3px 0;}
+  .hist-legend-row b{color:var(--text); margin-left:auto; font-size:13px;}
+  .hist-legend-row .dot{width:9px; height:9px; border-radius:50%; flex-shrink:0;}
+  .hist-sin-datos{color:var(--text3); font-size:12.5px;}
+  .hist-marca-row{display:flex; justify-content:space-between; align-items:center; padding:9px 0; border-bottom:1px solid var(--border); cursor:pointer;}
+  .hist-marca-row:last-child{border-bottom:none;}
+  .hist-marca-name{font-size:14px;}
+  .hist-marca-vals{display:flex; align-items:center; gap:6px; font-size:12.5px; flex-shrink:0;}
+  .hist-val-ant{color:var(--text3);}
+  .hist-val-arrow{color:var(--text3);}
+  .hist-val-act{color:var(--text); font-weight:700;}
 </style>
 </head>
 <body>
@@ -137,9 +156,32 @@
     <div class="topbar-inner">
     <button class="back-btn" id="btnBackFromCliente">‹</button>
     <div class="title">Detalle del cliente</div>
+    <button class="hist-btn" id="btnHistorico">Histórico</button>
     </div>
   </div>
   <div class="content" id="clienteContent">
+    <div class="loading">Cargando...</div>
+  </div>
+</div>
+<div id="screenHistorico" class="screen">
+  <div class="topbar">
+    <div class="topbar-inner">
+    <button class="back-btn" id="btnBackFromHistorico">‹</button>
+    <div class="title" id="historicoTitle">Histórico</div>
+    </div>
+  </div>
+  <div class="content" id="historicoContent">
+    <div class="loading">Cargando...</div>
+  </div>
+</div>
+<div id="screenHistoricoMarca" class="screen">
+  <div class="topbar">
+    <div class="topbar-inner">
+    <button class="back-btn" id="btnBackFromHistoricoMarca">‹</button>
+    <div class="title" id="historicoMarcaTitle">Artículos</div>
+    </div>
+  </div>
+  <div class="content" id="historicoMarcaContent">
     <div class="loading">Cargando...</div>
   </div>
 </div>
