@@ -281,6 +281,113 @@ function renderCliente(data) {
   });
 }
 document.getElementById('btnBackFromCliente').onclick = goBack;
+// ---------- Pantalla 2b: historico del cliente (mes actual vs mes anterior) ----------
+document.getElementById('btnHistorico').onclick = () => { if (currentClienteId) openHistorico(currentClienteId); };
+document.getElementById('btnBackFromHistorico').onclick = goBack;
+const CATS_HIST = ['Cervezas', 'Aguas', 'Vinos', 'Sidras'];
+let historicoMeses = { actual: '', anterior: '' };
+async function openHistorico(id) {
+  showScreen('screenHistorico');
+  const content = document.getElementById('historicoContent');
+  content.innerHTML = '<div class="loading">Cargando...</div>';
+  try {
+    const data = await api('/api/cliente/' + encodeURIComponent(id) + '/historico');
+    historicoMeses = { actual: data.nombre_mes_actual, anterior: data.nombre_mes_anterior };
+    document.getElementById('historicoTitle').textContent = `${data.nombre_mes_actual} vs ${data.nombre_mes_anterior}`;
+    renderHistorico(data);
+  } catch (e) {
+    content.innerHTML = '<div class="empty-msg">No se pudo cargar el histórico.</div>';
+  }
+}
+// Donut de 2 porciones (mes actual / mes anterior) armado con 2 <circle>
+// superpuestos y stroke-dasharray/stroke-dashoffset - no hace falta ninguna
+// libreria de graficos para un comparativo tan simple de 2 valores.
+function renderDonut(totalActual, totalAnterior, colorActual) {
+  const total = totalActual + totalAnterior;
+  if (total <= 0) return '';
+  const r = 40, strokeW = 16, c = 2 * Math.PI * r;
+  const dashActual = (totalActual / total) * c;
+  const dashAnterior = (totalAnterior / total) * c;
+  return `
+    <svg viewBox="0 0 100 100" class="donut" role="img" aria-label="Comparación ${historicoMeses.actual} vs ${historicoMeses.anterior}">
+      <circle cx="50" cy="50" r="${r}" fill="none" stroke="var(--text3)" stroke-width="${strokeW}"
+        stroke-dasharray="${dashAnterior} ${c}" stroke-dashoffset="${-dashActual}" transform="rotate(-90 50 50)"></circle>
+      <circle cx="50" cy="50" r="${r}" fill="none" stroke="${colorActual}" stroke-width="${strokeW}"
+        stroke-dasharray="${dashActual} ${c}" transform="rotate(-90 50 50)"></circle>
+    </svg>
+  `;
+}
+function renderHistoricoCategoria(cat, catData) {
+  const colorActual = CAT_COLORS[cat];
+  const totalActual = catData.total_actual || 0;
+  const totalAnterior = catData.total_anterior || 0;
+  let badge = '';
+  if (totalAnterior > 0) {
+    const varPct = Math.round(((totalActual - totalAnterior) / totalAnterior) * 1000) / 10;
+    badge = `<span class="hist-badge ${varPct >= 0 ? 'hist-up' : 'hist-down'}">${varPct >= 0 ? '+' : ''}${varPct}%</span>`;
+  }
+  const chart = (totalActual > 0 || totalAnterior > 0) ? `
+    <div class="hist-chart-row">
+      ${renderDonut(totalActual, totalAnterior, colorActual)}
+      <div class="hist-legend">
+        <div class="hist-legend-row"><span class="dot" style="background:${colorActual}"></span>${escapeHtml(historicoMeses.actual)} (a la fecha)<b>${fmt1(totalActual)} HL</b></div>
+        <div class="hist-legend-row"><span class="dot" style="background:var(--text3)"></span>${escapeHtml(historicoMeses.anterior)}<b>${fmt1(totalAnterior)} HL</b></div>
+      </div>
+    </div>
+  ` : '<div class="hist-sin-datos">Sin compras para comparar este mes.</div>';
+  const marcas = catData.marcas || [];
+  const marcasHtml = marcas.length ? marcas.map(m => `
+    <div class="hist-marca-row" data-marca="${escapeHtml(m.marca)}">
+      <div class="hist-marca-name">${escapeHtml(m.marca)}</div>
+      <div class="hist-marca-vals">
+        <span class="hist-val-ant">${fmt1(m.hl_anterior)} HL</span>
+        <span class="hist-val-arrow">→</span>
+        <span class="hist-val-act">${fmt1(m.hl_actual)} HL</span>
+      </div>
+    </div>
+  `).join('') : '<div class="sin-compra">Sin compras en estos 2 meses</div>';
+  return `
+    <div class="cat-section" style="--c:${colorActual};">
+      <div class="cat-title">${CAT_ICONS[cat]} ${cat}${badge}</div>
+      ${chart}
+      <div class="hist-marcas">${marcasHtml}</div>
+    </div>
+  `;
+}
+function renderHistorico(data) {
+  const content = document.getElementById('historicoContent');
+  content.innerHTML = CATS_HIST.map(cat => renderHistoricoCategoria(cat, data.categorias[cat] || { marcas: [], total_actual: 0, total_anterior: 0 })).join('');
+  content.querySelectorAll('.hist-marca-row').forEach(el => {
+    el.onclick = () => openHistoricoMarca(currentClienteId, el.getAttribute('data-marca'));
+  });
+}
+// ---------- Pantalla 2c: historico por articulo de una marca ----------
+document.getElementById('btnBackFromHistoricoMarca').onclick = goBack;
+async function openHistoricoMarca(clienteId, marca) {
+  showScreen('screenHistoricoMarca');
+  document.getElementById('historicoMarcaTitle').textContent = marca;
+  const content = document.getElementById('historicoMarcaContent');
+  content.innerHTML = '<div class="loading">Cargando...</div>';
+  try {
+    const data = await api(`/api/cliente/${encodeURIComponent(clienteId)}/historico/marca/${encodeURIComponent(marca)}`);
+    if (!data.filas.length) {
+      content.innerHTML = '<div class="empty-msg">Sin artículos para mostrar.</div>';
+      return;
+    }
+    content.innerHTML = `<p class="hist-sin-datos" style="margin:-6px 0 12px;">${escapeHtml(data.nombre_mes_anterior)} → ${escapeHtml(data.nombre_mes_actual)}</p>` + data.filas.map(r => `
+      <div class="hist-marca-row">
+        <div class="hist-marca-name">${escapeHtml(r.articulo)}</div>
+        <div class="hist-marca-vals">
+          <span class="hist-val-ant">${fmt1(r.hl_anterior)} HL</span>
+          <span class="hist-val-arrow">→</span>
+          <span class="hist-val-act">${fmt1(r.hl_actual)} HL</span>
+        </div>
+      </div>
+    `).join('');
+  } catch (e) {
+    content.innerHTML = '<div class="empty-msg">No se pudo cargar.</div>';
+  }
+}
 // ---------- Pantalla 3: articulos de una marca ----------
 async function openMarca(clienteId, marca) {
   showScreen('screenMarca');
