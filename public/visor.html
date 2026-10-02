@@ -526,22 +526,11 @@ async function doLogin(){
     document.getElementById('loginScreen').classList.add('hidden');
     document.getElementById('mainScreen').classList.remove('hidden');
     document.getElementById('userLabel').textContent = USERNAME + ' (' + ROLE + ')';
-    // El supervisor ve todo el dashboard (Volumen, Compradores) y en
-    // Configuracion solo puede subir el archivo de venta del dia y cambiar
-    // su propia contraseña. Las secciones de universo de clientes, mapeo
-    // Vendedor-Supervisor, configuracion de dias y usuarios son solo para
-    // admin - se fija el display en los DOS sentidos (block Y none) en cada
-    // login, no solo "block si admin", porque esta es una SPA: si antes en
-    // la misma pestaña habia una sesion de admin y despues se loguea otro
-    // usuario sin recargar la pagina, sin el "else" estas secciones (y sus
-    // mensajes de exito/error) quedaban pegadas de la sesion anterior.
     const esAdmin = ROLE === 'admin';
     document.getElementById('adminConfigSection').style.display = esAdmin ? 'block' : 'none';
     document.getElementById('adminUniversoSection').style.display = esAdmin ? 'block' : 'none';
     document.getElementById('adminSupRefSection').style.display = esAdmin ? 'block' : 'none';
     document.getElementById('adminUsersSection').style.display = esAdmin ? 'block' : 'none';
-    // Limpia mensajes de exito/error que hayan quedado de una sesion previa
-    // en la misma pestaña (mismo motivo que arriba).
     document.querySelectorAll('.msg').forEach(el => { el.textContent = ''; el.className = 'msg'; });
     showTab('volumen');
     await initPeriodoYKpis();
@@ -573,12 +562,6 @@ function authHeaders(){
   return {'Authorization': 'Bearer ' + TOKEN};
 }
 
-// El selector de periodo (multi-select "filtroMeses") muestra cada opcion
-// como par mes+año ("Noviembre 2025", value "2025-11"), no solo el mes -
-// esto permite armar rangos que crucen el fin de año (ej. Nov 2025 a Jun
-// 2026). Las opciones disponibles son las que realmente tienen datos
-// cargados (via /api/periodos-disponibles), asi que el usuario nunca puede
-// elegir un periodo sin datos.
 function periodoKey(anio, mes){ return anio + '-' + String(mes).padStart(2, '0'); }
 
 async function initPeriodoYKpis(){
@@ -602,9 +585,6 @@ async function initPeriodoYKpis(){
       labelsPeriodos[v] = NOMBRES_MES[m] + ' ' + a;
     }
     fillMs('filtroMeses', valores, labelsPeriodos);
-    // Solo se preselecciona el periodo actual si todavia no hay ninguno
-    // marcado (para no pisar la seleccion del usuario si initPeriodoYKpis se
-    // vuelve a llamar, ej. despues de subir el archivo de venta del dia).
     if(!MS_STATE['filtroMeses'] || MS_STATE['filtroMeses'].size === 0){
       MS_STATE['filtroMeses'] = new Set([DEFAULT_PERIODO]);
       renderMsPanel('filtroMeses');
@@ -631,7 +611,7 @@ const ICONOS_CAT = { 'Cervezas':'🍺', 'Aguas':'💧', 'Vinos':'🍷', 'Sidras'
 function catLabel(cat){ return (ICONOS_CAT[cat] ? ICONOS_CAT[cat] + ' ' : '') + cat; }
 
 async function loadKpis(){
-  const periodos = getMsValues('filtroMeses').sort(); // "YYYY-MM": el orden alfabetico ya es cronologico
+  const periodos = getMsValues('filtroMeses').sort();
   if(!periodos.length){ return; }
   CURRENT_PERIODOS = periodos;
   document.getElementById('kpiArea').innerHTML = '<div class="loading">Cargando datos...</div>';
@@ -666,10 +646,6 @@ function fmtInt(n){
   return n.toLocaleString('es-AR');
 }
 
-// Tabla compartida por "Volumen por canal" y "Compradores por canal": filas =
-// canales, columnas = cada categoria (Actual / mismo mes año pasado / mes
-// pasado) mas una columna Total que suma las categorias. data viene de
-// /api/canal o /api/canal-compradores, con la misma forma en ambos casos.
 function renderCanalTable(tableId, data, fmtFn, unitLabel){
   const table = document.getElementById(tableId);
   const CATS = ['Cervezas','Aguas','Vinos','Sidras'];
@@ -748,9 +724,6 @@ async function loadCanalCompradores(){
   }
 }
 
-// Tabla compartida por "Volumen por marca y canal" y "Compradores por marca y
-// canal": filas = marcas (de UNA categoria elegida con el select), columnas =
-// los canales que hayan aparecido en los datos (dinamico, no hardcodeado).
 function renderMarcaCanalTable(tableId, data, fmtFn, unitLabel, categoria, tipo){
   const table = document.getElementById(tableId);
   const conMesAnterior = data.mes_anterior_num !== null && data.mes_anterior_num !== undefined;
@@ -773,8 +746,6 @@ function renderMarcaCanalTable(tableId, data, fmtFn, unitLabel, categoria, tipo)
   thead += '</tr>';
   table.querySelector('thead').innerHTML = thead;
 
-  // El nombre de la marca es cliqueable (salvo en la fila "Total general")
-  // para abrir el desglose por artículo de esa marca (loadMarcaArticuloDrill).
   function fila(nombre, filaData, negrita){
     const style = negrita ? 'font-weight:700; border-top:2px solid var(--border);' : 'border-top:1px solid var(--border);';
     const nombreEscapado = nombre.replace(/'/g,"\\'");
@@ -846,9 +817,6 @@ function exportarMarcaCanalExcel(tableId, nombreArchivo){
   XLSX.writeFile(wb, nombreArchivo + '.xlsx');
 }
 
-// Tabla del desglose de UNA marca por ARTICULO (drill-down desde "Volumen
-// por marca y canal" / "Compradores por marca y canal"). Filas = articulos,
-// una sola columna de grupo (Actual / año anterior / [mes anterior]).
 function renderArticuloTable(tableId, data, fmtFn, unitLabel){
   const table = document.getElementById(tableId);
   const conMesAnterior = data.mes_anterior_num !== null && data.mes_anterior_num !== undefined;
@@ -885,10 +853,6 @@ function renderArticuloTable(tableId, data, fmtFn, unitLabel){
   table.querySelector('tbody').innerHTML = tbody;
 }
 
-// Abre el desglose por articulo de una marca puntual, tanto desde "Volumen
-// por marca y canal" (tipo='volumen') como desde "Compradores por marca y
-// canal" (tipo='compradores'). No oculta la seccion de origen (mismo patron
-// que drillDownSection de Ranking de marcas): solo aparece debajo.
 async function loadMarcaArticuloDrill(categoria, marca, tipo){
   const esVol = tipo === 'volumen';
   const sectionId = esVol ? 'articuloVolDrillSection' : 'articuloCompDrillSection';
@@ -953,12 +917,6 @@ function renderKpis(data){
   html += `<p class="note">Días de venta transcurridos: ${data.dias_venta_reales ?? '-'} · Días configurados: ${data.dias_configurados ?? '-'}</p>`;
   area.innerHTML = html;
 
-  // Barra de periodo (compartida entre Volumen y Compradores): dias
-  // trabajados (dias_venta_reales, calculado del archivo subido), dias
-  // configurados (el numero manual que carga el admin, ej 26) y cuantos
-  // faltan = configurados - trabajados. Se actualiza aca (no en
-  // renderKpisCompradores) porque ambos endpoints devuelven los mismos
-  // valores para el mismo periodo, y esta funcion siempre se llama primero.
   const diasProgresoBar = document.getElementById('diasProgresoBar');
   if(diasProgresoBar){
     const trabajados = data.dias_venta_reales;
@@ -987,10 +945,6 @@ async function loadRankingMarcas(){
     const rows = await res.json();
     if(!res.ok){ area.innerHTML = '<div class="loading">' + (rows.error||'Error') + '</div>'; return; }
     if(!rows.length){ area.innerHTML = '<div class="loading">Sin datos para esta categoría en este período.</div>'; return; }
-    // "Total {categoria}" es la suma de HL de todas las marcas del ranking -
-    // se agrega como primera barra, con otro color para distinguirla, y al
-    // hacer clic lleva al ranking de CLIENTES de toda la categoria (no de una
-    // marca sola): un cliente que compro varias marcas cuenta 1 sola vez.
     const totalHl = rows.reduce((acc, r) => acc + (r.hl || 0), 0);
     const max = Math.max(totalHl, rows[0].hl);
     let html = `
@@ -1023,10 +977,6 @@ async function loadRankingMarcas(){
   }
 }
 
-// Ranking de clientes de TODA la categoria (todas las marcas juntas), para el
-// clic en "Total {categoria}" del ranking de marcas. Reusa /api/ranking/
-// clientes-categoria (ya cuenta cada cliente 1 sola vez aunque compre varias
-// marcas) con el mismo limite (15) que el drill-down por marca.
 async function loadDrillDownTotal(categoria){
   const section = document.getElementById('drillDownSection');
   const body = document.getElementById('drillDownBody');
@@ -1088,13 +1038,6 @@ function exportarClientesExcel(){
   XLSX.writeFile(wb, 'ranking_clientes.xlsx');
 }
 
-// Version "compradores" del ranking de marcas (tab Compradores): misma forma
-// visual que loadRankingMarcas, pero las barras son cantidad de clientes
-// distintos que compraron cada marca (no HL), y la fila "Total {categoria}"
-// es la cantidad de clientes distintos que compraron CUALQUIER marca de la
-// categoria (no la suma de compradores de cada marca - un cliente que
-// compro 2 marcas no se cuenta 2 veces). La calcula el backend
-// (/api/ranking/marcas-compradores) para no duplicar esa logica en el frontend.
 async function loadRankingMarcasCompradores(){
   if(!CURRENT_PERIODOS.length) return;
   const categoria = document.getElementById('catRankingCompSelect').value;
@@ -1138,10 +1081,6 @@ async function loadRankingMarcasCompradores(){
   }
 }
 
-// Clientes que compraron UNA marca puntual (clic en una barra del ranking de
-// compradores) - misma data que loadDrillDown (Volumen) pero renderizada en
-// la seccion propia de la tab Compradores (drillDownCompSection), para no
-// pisar el drill-down de la tab Volumen.
 async function loadDrillDownComp(categoria, marca){
   const section = document.getElementById('drillDownCompSection');
   const body = document.getElementById('drillDownCompBody');
@@ -1167,9 +1106,6 @@ async function loadDrillDownComp(categoria, marca){
   }
 }
 
-// Clientes de TODA la categoria (clic en "Total {categoria}" del ranking de
-// compradores) - misma idea que loadDrillDownTotal pero para la seccion de
-// la tab Compradores.
 async function loadDrillDownTotalComp(categoria){
   const section = document.getElementById('drillDownCompSection');
   const body = document.getElementById('drillDownCompBody');
@@ -1206,20 +1142,9 @@ function exportarClientesCompradoresExcel(){
   XLSX.writeFile(wb, 'ranking_clientes_compradores.xlsx');
 }
 
-// Lista completa de vendedores (sin filtrar por supervisor) y el mapeo
-// supervisor -> [vendedores de su mesa], que manda el backend en
-// /api/filtros/opciones (calculado desde las ventas reales, no desde la
-// tabla de referencia Vendedor-Supervisor). Se guardan aparte de MS_VALUES
-// porque actualizarOpcionesVendedor() necesita la lista COMPLETA para poder
-// volver a mostrarla cuando se destilda el filtro de Supervisor.
 let VENDEDORES_TODOS = [];
 let VENDEDORES_POR_SUPERVISOR = {};
 
-// Filtra las opciones del boton "Vendedor" segun el/los Supervisor(es)
-// tildados en ese momento: sin supervisor tildado muestra todos los
-// vendedores; con uno o mas tildados, solo los que tienen ventas bajo esos
-// supervisores. fillMs ya se encarga de destildar en "Vendedor" cualquier
-// seleccion previa que deje de estar disponible.
 function actualizarOpcionesVendedor(){
   const supsSeleccionados = getMsValues('filtroSupervisor');
   let valores;
@@ -1249,13 +1174,6 @@ async function loadFiltrosOpciones(){
   }catch(e){}
 }
 
-// Componente de filtro con seleccion multiple (checkboxes en un panel
-// desplegable). MS_STATE guarda, por id de filtro, el Set de valores
-// tildados; MS_VALUES guarda la lista completa de opciones disponibles
-// (para poder reconstruir el panel sin perder la seleccion al recargar).
-// MS_LABELS es opcional: id -> {valor: texto a mostrar}, para filtros donde
-// el valor interno (ej "1"..."12" para meses) no es igual al texto que ve
-// el usuario (ej "Enero"..."Diciembre").
 const MS_STATE = {};
 const MS_VALUES = {};
 const MS_LABELS = {};
@@ -1264,7 +1182,6 @@ function fillMs(id, values, labels){
   MS_VALUES[id] = values || [];
   if(labels) MS_LABELS[id] = labels;
   if(!MS_STATE[id]) MS_STATE[id] = new Set();
-  // saca de la seleccion valores que ya no existen mas en la lista
   MS_STATE[id] = new Set([...MS_STATE[id]].filter(v => values.includes(v)));
   renderMsPanel(id);
   updateMsButton(id);
@@ -1290,12 +1207,6 @@ function renderMsPanel(id){
   panel.innerHTML = html;
 }
 
-// El filtro de meses ("filtroMeses") no puede quedar vacio (a diferencia de
-// Supervisor/Vendedor/Dia/Camionero, donde vacio significa "todos" y el
-// backend no exige el parametro): /api/kpis y el resto de los endpoints de
-// periodo necesitan al menos un periodo. Si una accion deja la seleccion
-// vacia, se vuelve a marcar DEFAULT_PERIODO (el mes actual segun el ultimo
-// archivo subido) en vez de dejarla en blanco.
 function ensureMesesNoVacio(id){
   if(id !== 'filtroMeses') return;
   if(MS_STATE[id].size === 0 && DEFAULT_PERIODO){
@@ -1331,10 +1242,6 @@ function msClear(id){
   loadKpis();
 }
 
-// Cuando queda exactamente UNA opcion tildada y el filtro tiene labels (hoy
-// solo "filtroMeses"), el boton muestra directamente ese texto (ej
-// "Septiembre 2026") en vez de "(1)" - es mas claro que el numero. Con 0 o 2+
-// opciones se mantiene el formato de siempre.
 function updateMsButton(id){
   const wrap = document.getElementById('ms-' + id);
   const btn = wrap.querySelector('.ms-btn');
@@ -1377,10 +1284,6 @@ function limpiarFiltros(){
   loadKpis();
 }
 
-// A diferencia de limpiarFiltros() (que deja Supervisor/Vendedor/Dia/
-// Camionero en "todos"), limpiar el filtro de meses vuelve a dejar
-// seleccionado solo el periodo actual (DEFAULT_PERIODO) - ver comentario en
-// ensureMesesNoVacio.
 function limpiarMeses(){
   MS_STATE['filtroMeses'] = new Set(DEFAULT_PERIODO ? [DEFAULT_PERIODO] : []);
   renderMsPanel('filtroMeses');
@@ -1398,18 +1301,10 @@ function filtrosQueryString(){
   return qs;
 }
 
-// Query string del periodo (pares mes-año seleccionados, ej "2025-11|2026-01")
-// para todos los endpoints que dependen del periodo compartido (Volumen y
-// Compradores).
 function periodoQueryString(){
   return `periodos=${CURRENT_PERIODOS.join('|')}`;
 }
 
-// Etiqueta legible de un conjunto de periodos (array de {mes, anio}, como
-// los devuelve el backend): un solo periodo muestra el nombre completo
-// ("Septiembre 2026"), 2 o mas muestran un rango abreviado del primero al
-// ultimo periodo seleccionado ("Nov 2025-Jun 2026"), permitiendo que el
-// rango cruce de un año a otro.
 const NOMBRES_MES_ABREV = ['','Ene','Feb','Mar','Abr','May','Jun','Jul','Ago','Sep','Oct','Nov','Dic'];
 function formatPeriodoLabel(periodos){
   if(!periodos || !periodos.length) return '';
@@ -1417,7 +1312,6 @@ function formatPeriodoLabel(periodos){
   const primero = periodos[0], ultimo = periodos[periodos.length-1];
   return NOMBRES_MES_ABREV[primero.mes] + ' ' + primero.anio + '-' + NOMBRES_MES_ABREV[ultimo.mes] + ' ' + ultimo.anio;
 }
-// Mismos periodos, un año antes cada uno - para el rotulo de "año anterior".
 function periodosAnioAnterior(periodos){
   return (periodos || []).map(p => ({ mes: p.mes, anio: p.anio - 1 }));
 }
@@ -1438,14 +1332,30 @@ function readWorkbook(file){
 function getDenseRows(ws){
   const rows = XLSX.utils.sheet_to_json(ws, {header:1, raw:true, defval: undefined});
   if(!Array.isArray(rows)) throw new Error('No se pudo interpretar el contenido de la hoja.');
+  // Si el archivo tiene celdas combinadas (fusionadas) - comun en exportes de
+  // ERP para no repetir el mismo valor de Ramo/Categoria en cada fila cuando
+  // varios clientes seguidos comparten el mismo valor - SheetJS solo pone el
+  // dato en la celda superior-izquierda del rango combinado y deja el resto
+  // vacio. Sin este relleno, esas filas quedaban con el dato vacio aunque en
+  // el Excel se vea "cargado" (visualmente ocupa varias filas de una).
+  const merges = ws['!merges'];
+  if(Array.isArray(merges)){
+    for(const m of merges){
+      const filaBase = rows[m.s.r];
+      const valorBase = filaBase ? filaBase[m.s.c] : undefined;
+      if(valorBase === undefined || valorBase === null || valorBase === '') continue;
+      for(let r = m.s.r; r <= m.e.r; r++){
+        if(!rows[r]) rows[r] = [];
+        for(let c = m.s.c; c <= m.e.c; c++){
+          if(rows[r][c] === undefined || rows[r][c] === null || rows[r][c] === ''){
+            rows[r][c] = valorBase;
+          }
+        }
+      }
+    }
+  }
   return rows;
 }
-// Normaliza (espacios, mayusculas/minusculas, acentos) antes de comparar -
-// "Descripcion categoria" y "Descripcion categoría" (o cualquier diferencia
-// de tildes/mayusculas entre lo que mandamos nosotros y como esta el
-// encabezado real en el archivo) matchean igual. Antes era comparacion
-// exacta y una tilde de mas/de menos hacia que la columna "no se encontrara"
-// sin ningun error (quedaba vacia en silencio, por ser columna opcional).
 function normalizarEncabezado(s){
   return String(s == null ? '' : s).trim().toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/\s+/g, ' ');
 }
@@ -1455,12 +1365,6 @@ function findColIndex(headerRow, name){
   for(let i=0;i<headerRow.length;i++){ if(normalizarEncabezado(headerRow[i]) === buscado) return i; }
   return -1;
 }
-// Cuenta TODAS las columnas del encabezado que matchean "name" (no solo la
-// primera, a diferencia de findColIndex). Si un archivo tiene 2 columnas con
-// el mismo nombre (pasa en exportes de ERP con columnas repetidas de otros
-// reportes), findColIndex siempre toma la primera, que puede ser la columna
-// equivocada y estar vacia aunque la columna "correcta" (mas adelante en el
-// archivo) si tenga datos. Se usa solo para diagnostico.
 function contarColIndices(headerRow, name){
   const buscado = normalizarEncabezado(name);
   let n = 0;
@@ -1468,16 +1372,6 @@ function contarColIndices(headerRow, name){
   return n;
 }
 
-// El archivo de ventas real pesa 15-25MB con ~260 columnas y hasta ~100.000
-// filas. Se probo parsearlo en el navegador con esta misma libreria (SheetJS)
-// para no subir el binario pesado, pero SheetJS arma el libro ENTERO en
-// memoria antes de devolver nada, y con este volumen terminaba "perdiendo"
-// todas las celdas (el archivo se leia como vacio) - paso tanto con el
-// .xlsb original como con una copia guardada de nuevo en Excel como .xlsx,
-// asi que no era un problema del formato sino del volumen de datos. Por eso
-// ahora el archivo se sube CRUDO (ver procesarVentasHoy) y se parsea en el
-// servidor con exceljs en modo streaming (lee fila por fila sin cargar el
-// libro entero en memoria).
 async function procesarSupRef(){
   const file = document.getElementById('fileSupRef').files[0];
   if(!file){ showMsg('supRefMsg', 'Elegí un archivo', false); return; }
@@ -1509,11 +1403,6 @@ async function procesarSupRef(){
   }
 }
 
-// Archivo "universo" (maestro de clientes del ERP): a diferencia del archivo
-// de venta del dia, este SI trae clientes nuevos y sus datos (razon social,
-// domicilio, vendedor, dia de visita). Se parsea en el navegador (mismo
-// tamaño de archivo que el mapeo Vendedor-Supervisor, no el de ventas) y se
-// manda como JSON al backend, que hace upsert por cliente_id.
 async function procesarUniverso(){
   const file = document.getElementById('fileUniverso').files[0];
   if(!file){ showMsg('universoMsg', 'Elegí un archivo', false); return; }
@@ -1530,9 +1419,6 @@ async function procesarUniverso(){
       domicilio: findColIndex(header, 'Domicilio'),
       vendedor: findColIndex(header, 'Fuerza de venta 1 Descripcion personal comercial'),
       dia: findColIndex(header, 'Fuerza de venta 1 Dias de visita'),
-      // Columnas para la pantalla "Datos" del cliente y el horario de entrega
-      // en el listado de la app de vendedores - opcionales (si el archivo
-      // todavia no las trae, no rompen la actualizacion del resto).
       calle: findColIndex(header, 'Calle'),
       calle1: findColIndex(header, 'Calle 1'),
       calle2: findColIndex(header, 'Calle 2'),
@@ -1565,10 +1451,6 @@ async function procesarUniverso(){
       });
     }
     if(!clientes.length) throw new Error('No se encontraron filas con código de cliente.');
-    // Columnas opcionales que no se encontraron en el encabezado del archivo -
-    // se avisa en el mensaje final (en vez de quedar vacias en silencio) para
-    // poder diagnosticar un nombre de columna que no matchea sin tener que
-    // adivinar.
     const OPCIONALES = {
       calle: {nombre: 'Calle', campo: 'calle'},
       calle1: {nombre: 'Calle 1', campo: 'calle1'},
@@ -1606,11 +1488,6 @@ async function procesarUniverso(){
   }
 }
 
-// El archivo se sube CRUDO por partes (ver comentario mas arriba) y se
-// parsea en el servidor con exceljs en modo streaming - no se lee nada en
-// el navegador. Como la subida y el parseo pueden tardar, el servidor
-// responde enseguida al terminar de recibir el archivo y esta funcion
-// consulta el estado hasta que termina.
 async function procesarVentasHoy(){
   const file = document.getElementById('fileVentasHoy').files[0];
   if(!file){ showMsg('uploadVentasMsg', 'Elegí un archivo', false); return; }
@@ -1618,7 +1495,7 @@ async function procesarVentasHoy(){
     showMsg('uploadVentasMsg', 'Error: los archivos .xlsb no se pueden leer directamente. Abrilo en Excel, hace "Archivo > Guardar como > Libro de Excel (.xlsx)" y subi ese archivo.', false);
     return;
   }
-  const CHUNK_SIZE = 4 * 1024 * 1024; // 4MB por pedazo
+  const CHUNK_SIZE = 4 * 1024 * 1024;
   try{
     showMsg('uploadVentasMsg', 'Iniciando subida...', true);
     const startRes = await fetch(API + '/api/upload-excel/start?filename=' + encodeURIComponent(file.name), { method: 'POST', headers: authHeaders() });
@@ -1677,9 +1554,6 @@ async function loadCompradores(){
   }
 }
 
-// Mismo layout que renderKpis() (Volumen) pero contando clientes compradores
-// distintos en vez de sumar HL. Cada card mantiene el click para ir al
-// listado de clientes de esa categoria (loadCompradoresDrill).
 function renderKpisCompradores(data){
   const area = document.getElementById('compradoresArea');
   const cats = ['Cervezas','Aguas','Vinos','Sidras'];
@@ -1815,8 +1689,6 @@ async function saveDiasConfig(){
   }
 }
 
-// Cambio de la propia contraseña - disponible para cualquier usuario logueado
-// (admin o supervisor). Pide la contraseña actual para confirmar identidad.
 async function cambiarMiPassword(){
   const actual = document.getElementById('passActual').value;
   const nueva = document.getElementById('passNueva').value;
@@ -1836,9 +1708,6 @@ async function cambiarMiPassword(){
   }
 }
 
-// Gestion de usuarios - solo admin. Restablecer contraseña usa prompt() para
-// no tener que armar un modal aparte; es consistente con el resto de la app
-// (los mensajes de validacion ya usan alert()/confirm() en varios lados).
 async function loadUsuarios(){
   const body = document.getElementById('usersBody');
   body.innerHTML = '<tr><td colspan="3" style="padding:10px;">Cargando...</td></tr>';
