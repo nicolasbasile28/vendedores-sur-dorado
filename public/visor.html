@@ -400,7 +400,7 @@
 
     <div class="section" id="articuloCompDrillSection" style="display:none;">
       <h2 id="articuloCompDrillTitle">Compradores por artículo</h2>
-      <button onclick="exportarMarcaCanalExcel('articuloCompDrillTable', 'compradores_por_articulo')" style="background:var(--bordo); color:#fff; border:none; padding:7px 14px; border-radius:6px; cursor:pointer; font-size:13px; margin-bottom:12px;">Exportar a Excel</button>
+      <button onclick="exportarMarcaCanalExcel('articuloCompDrillTable', 'compradores_por_articulo')" style="background:var(--bordo); color:#fff; border:none; padding:7px 14px; border-radius:6px; cursor:pointer; margin-bottom:12px;">Exportar a Excel</button>
       <div style="overflow-x:auto;">
         <table style="width:100%; border-collapse:collapse; font-size:12px; white-space:nowrap;" id="articuloCompDrillTable">
           <thead></thead>
@@ -430,7 +430,7 @@
         <button onclick="procesarUniverso()">Actualizar</button>
       </div>
       <div id="universoMsg" class="msg"></div>
-      <p class="note">El archivo debe tener las columnas Cliente, Razon social, Domicilio, "Fuerza de venta 1 Descripcion personal comercial" y "Fuerza de venta 1 Dias de visita". Se usa para agregar clientes nuevos y actualizar los existentes (código, razón social, domicilio, vendedor y día de visita) en la app de vendedores. Los clientes que no aparezcan en el archivo no se borran.</p>
+      <p class="note">El archivo debe tener las columnas Cliente, Razon social, Domicilio, "Fuerza de venta 1 Descripcion personal comercial" y "Fuerza de venta 1 Dias de visita". Si además tiene Calle, Calle 1, Calle 2, Descripcion localidad, Horario de entrega, Descripcion de ramo y Descripcion categoria, esos datos también se guardan y se muestran en la pantalla "Datos" de cada cliente en la app de vendedores (son opcionales). Se usa para agregar clientes nuevos y actualizar los existentes. Los clientes que no aparezcan en el archivo no se borran.</p>
     </div>
 
     <div class="section" id="adminSupRefSection" style="display:none;">
@@ -1508,10 +1508,21 @@ async function procesarUniverso(){
       domicilio: findColIndex(header, 'Domicilio'),
       vendedor: findColIndex(header, 'Fuerza de venta 1 Descripcion personal comercial'),
       dia: findColIndex(header, 'Fuerza de venta 1 Dias de visita'),
+      // Columnas para la pantalla "Datos" del cliente y el horario de entrega
+      // en el listado de la app de vendedores - opcionales (si el archivo
+      // todavia no las trae, no rompen la actualizacion del resto).
+      calle: findColIndex(header, 'Calle'),
+      calle1: findColIndex(header, 'Calle 1'),
+      calle2: findColIndex(header, 'Calle 2'),
+      localidad: findColIndex(header, 'Descripcion localidad'),
+      horario: findColIndex(header, 'Horario de entrega'),
+      ramo: findColIndex(header, 'Descripcion de ramo'),
+      categoriaCliente: findColIndex(header, 'Descripcion categoria'),
     };
     if(idx.cliente < 0 || idx.razonSocial < 0 || idx.domicilio < 0 || idx.vendedor < 0 || idx.dia < 0){
       throw new Error('Faltan columnas: Cliente, Razon social, Domicilio, Fuerza de venta 1 Descripcion personal comercial o Fuerza de venta 1 Dias de visita');
     }
+    const val = (row, i) => i >= 0 && row[i] !== undefined && row[i] !== null ? row[i].toString().trim() : '';
     const clientes = [];
     for(let r=1;r<rows.length;r++){
       const row = rows[r];
@@ -1522,6 +1533,13 @@ async function procesarUniverso(){
         domicilio: (row[idx.domicilio]||'').toString().trim(),
         personal_comercial: (row[idx.vendedor]||'').toString().trim(),
         dias_visita: (row[idx.dia]||'').toString().trim(),
+        calle: val(row, idx.calle),
+        calle1: val(row, idx.calle1),
+        calle2: val(row, idx.calle2),
+        localidad: val(row, idx.localidad),
+        horario_entrega: val(row, idx.horario),
+        ramo: val(row, idx.ramo),
+        categoria_cliente: val(row, idx.categoriaCliente),
       });
     }
     if(!clientes.length) throw new Error('No se encontraron filas con código de cliente.');
