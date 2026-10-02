@@ -386,9 +386,25 @@ function guardarVentas({ clientes, ventas, mes_actual, mes, anio, dias_venta_rea
     } else {
       db.exec('DELETE FROM ventas');
     }
+    // IMPORTANTE: antes esto era "INSERT OR REPLACE", que en SQLite borra la
+    // fila existente y la vuelve a insertar solo con las columnas listadas acá
+    // (cliente_id, razon_social, domicilio, personal_comercial, dias_visita) -
+    // todas las demas columnas del cliente (calle, calle1, calle2, localidad,
+    // horario_entrega, ramo, categoria_cliente, cargadas por el universo)
+    // quedaban en NULL. Por eso Ramo/Categoria aparecian vacios en la pantalla
+    // "Datos" de la app de vendedores para CUALQUIER cliente que tuviera una
+    // venta en el archivo del dia subido DESPUES del universo: esta subida los
+    // pisaba sin querer. Con ON CONFLICT DO UPDATE solo se actualizan los 4
+    // campos que vienen del archivo de ventas: el resto de la fila existente
+    // (los datos del universo) se mantiene intacto.
     const insCliente = db.prepare(`
-      INSERT OR REPLACE INTO clientes (cliente_id, razon_social, domicilio, personal_comercial, dias_visita)
+      INSERT INTO clientes (cliente_id, razon_social, domicilio, personal_comercial, dias_visita)
       VALUES (?,?,?,?,?)
+      ON CONFLICT(cliente_id) DO UPDATE SET
+        razon_social = excluded.razon_social,
+        domicilio = excluded.domicilio,
+        personal_comercial = excluded.personal_comercial,
+        dias_visita = excluded.dias_visita
     `);
     for (const c of clientes) {
       insCliente.run(String(c.cliente_id), c.razon_social || '', c.domicilio || '', c.personal_comercial || '', c.dias_visita || '');
@@ -465,7 +481,7 @@ function nuevoAcumuladorVentas() {
   };
 }
 function fechaAStr(d) {
-  return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
+    return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
 }
 function agregarFilaVenta(acc, f) {
   const cat = CAT_MAP_SERVIDOR[f.division];
@@ -947,8 +963,7 @@ route('GET', '/api/kpis', async (req, res) => {
   const diasConfigurados = diasConfigRow ? Number(diasConfigRow.value) : null;
   // dias_venta_reales se guarda por UN mes puntual al subir el archivo - con
   // varios meses seleccionados no hay forma confiable de sumarlo, asi que
-  // queda null (y el proyectado tambien) salvo que se haya elegido un solo mes.
-  let diasReales = null;
+        let diasReales = null;
   if (soloUnMes) {
     const diasRealesRow = db.prepare('SELECT value FROM meta WHERE key = ?').get(`dias_reales_${periodos[0].anio}_${String(periodos[0].mes).padStart(2, '0')}`);
     diasReales = diasRealesRow ? Number(diasRealesRow.value) : null;
@@ -1432,7 +1447,7 @@ route('GET', '/api/canal-compradores', async (req, res) => {
         SELECT v.canal as canal, v.cliente_id as cliente_id, SUM(v.um_hl) as hl
         FROM ventas v ${join}
         WHERE 1=1${pClause}${clause}
-        GROUP BY v.canal, v.cliente_id
+                GROUP BY v.canal, v.cliente_id
         HAVING SUM(v.um_hl) >= 0.001
       ) GROUP BY canal
     `).all(...pParams, ...params);
