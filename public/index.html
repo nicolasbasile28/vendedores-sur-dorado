@@ -98,6 +98,11 @@
   .hist-val-ant{color:var(--text3);}
   .hist-val-arrow{color:var(--text3);}
   .hist-val-act{color:var(--text); font-weight:700;}
+  .topbar-btns{display:flex; gap:6px; flex-shrink:0;}
+  .dato-row{display:flex; justify-content:space-between; align-items:flex-start; gap:12px; padding:11px 0; border-bottom:1px solid var(--border);}
+  .dato-row:last-child{border-bottom:none;}
+  .dato-label{font-size:12.5px; color:var(--text2); font-weight:600; flex-shrink:0;}
+  .dato-value{font-size:14px; text-align:right;}
 </style>
 </head>
 <body>
@@ -156,10 +161,24 @@
     <div class="topbar-inner">
     <button class="back-btn" id="btnBackFromCliente">‹</button>
     <div class="title">Detalle del cliente</div>
-    <button class="hist-btn" id="btnHistorico">Histórico</button>
+    <div class="topbar-btns">
+      <button class="hist-btn" id="btnDatos">Datos</button>
+      <button class="hist-btn" id="btnHistorico">Histórico</button>
+    </div>
     </div>
   </div>
   <div class="content" id="clienteContent">
+    <div class="loading">Cargando...</div>
+  </div>
+</div>
+<div id="screenDatos" class="screen">
+  <div class="topbar">
+    <div class="topbar-inner">
+    <button class="back-btn" id="btnBackFromDatos">‹</button>
+    <div class="title">Datos del cliente</div>
+    </div>
+  </div>
+  <div class="content" id="datosContent">
     <div class="loading">Cargando...</div>
   </div>
 </div>
