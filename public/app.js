@@ -170,9 +170,10 @@ function renderClientList(list) {
         <div class="name">${escapeHtml(c.razon_social || '(sin nombre)')}</div>
         <div class="addr">${escapeHtml(c.domicilio || '')}</div>
         <div class="code">Código: ${escapeHtml(c.cliente_id)}</div>
+        ${c.horario_entrega ? `<div class="code">Horario: ${escapeHtml(c.horario_entrega)}</div>` : ''}
       </div>
       <div class="right-side">
-        <div class="cat-badges">${(c.categorias || []).map(cat => `<span class="cat-badge" title="${escapeHtml(cat)}">${CAT_ICONS[cat] || ''}</span>`).join('')}</div>
+        <div class="cat-badges">${(c.categorias || []).map(cat => `<span class="cat-badge" title="${escapeHtml(cat)}">${CAT_ICONS[cat] || ''}</span>`).join('')}${c.isotonicas ? `<span class="cat-badge" title="Isotónicas">${ISOTONICA_ICON}</span>` : ''}</div>
         <div class="arrow">›</div>
       </div>
     </div>
@@ -222,9 +223,10 @@ function renderCategoriaClientes(list) {
         <div class="name">${escapeHtml(c.razon_social || '(sin nombre)')}</div>
         <div class="addr">${escapeHtml(c.domicilio || '')}</div>
         <div class="code">Código: ${escapeHtml(c.cliente_id)}</div>
+        ${c.horario_entrega ? `<div class="code">Horario: ${escapeHtml(c.horario_entrega)}</div>` : ''}
       </div>
       <div class="right-side">
-        <div class="cat-badges">${(c.categorias || []).map(cat => `<span class="cat-badge" title="${escapeHtml(cat)}">${CAT_ICONS[cat] || ''}</span>`).join('')}</div>
+        <div class="cat-badges">${(c.categorias || []).map(cat => `<span class="cat-badge" title="${escapeHtml(cat)}">${CAT_ICONS[cat] || ''}</span>`).join('')}${c.isotonicas ? `<span class="cat-badge" title="Isotónicas">${ISOTONICA_ICON}</span>` : ''}</div>
         <div class="arrow">›</div>
       </div>
     </div>
@@ -237,14 +239,21 @@ document.getElementById('btnBackFromCategoria').onclick = goBack;
 // ---------- Pantalla 2: detalle de cliente ----------
 const CAT_ICONS = { 'Cervezas':'🍺', 'Aguas':'💧', 'Vinos':'🍷', 'Sidras':'🍏' };
 const CAT_COLORS = { 'Cervezas':'var(--cerveza)', 'Aguas':'var(--agua)', 'Vinos':'var(--vinos)', 'Sidras':'var(--sidras)' };
+// Isotonicas no tiene emoji propio - se dibuja una botellita roja chica en
+// SVG inline (mismo tamaño que los emoji de CAT_ICONS) en vez de buscar un
+// emoji parecido, para que quede exactamente lo que pidio el usuario.
+const ISOTONICA_ICON = '<svg width="13" height="15" viewBox="0 0 13 15" style="vertical-align:-2px;"><rect x="5" y="0" width="3" height="2.5" rx="0.5" fill="#8a2420"/><path d="M4 2.5H9V4.3C10.1 5.1 10.7 6.2 10.7 7.5V12.5C10.7 13.9 9.6 15 8.2 15H4.8C3.4 15 2.3 13.9 2.3 12.5V7.5C2.3 6.2 2.9 5.1 4 4.3V2.5Z" fill="#e03b3b"/></svg>';
 let currentClienteId = null;
+let currentClienteData = null;
 async function openCliente(id) {
   currentClienteId = id;
+  currentClienteData = null;
   showScreen('screenCliente');
   const content = document.getElementById('clienteContent');
   content.innerHTML = '<div class="loading">Cargando...</div>';
   try {
     const data = await api('/api/cliente/' + encodeURIComponent(id));
+    currentClienteData = data.cliente;
     renderCliente(data);
   } catch (e) {
     content.innerHTML = '<div class="empty-msg">No se pudo cargar el cliente.</div>';
@@ -281,6 +290,34 @@ function renderCliente(data) {
   });
 }
 document.getElementById('btnBackFromCliente').onclick = goBack;
+// ---------- Pantalla 2a: datos del cliente (universo) ----------
+// Usa los datos que ya trajo openCliente() (currentClienteData, el objeto
+// "cliente" de /api/cliente/:id - ya incluye las columnas nuevas de la
+// tabla clientes) en vez de pedirlos de nuevo al servidor.
+document.getElementById('btnDatos').onclick = () => { if (currentClienteData) openDatos(); };
+document.getElementById('btnBackFromDatos').onclick = goBack;
+function datoRow(label, value) {
+  return `<div class="dato-row"><div class="dato-label">${escapeHtml(label)}</div><div class="dato-value">${escapeHtml(value || '-')}</div></div>`;
+}
+function openDatos() {
+  showScreen('screenDatos');
+  const d = currentClienteData;
+  const entreCalle = [d.calle1, d.calle2].filter(Boolean).join(' y ');
+  document.getElementById('datosContent').innerHTML = `
+    <div class="cliente-header">
+      <div class="name">${escapeHtml(d.razon_social)}</div>
+      <div class="addr">Código ${escapeHtml(d.cliente_id)}</div>
+    </div>
+    ${datoRow('Dirección', d.calle)}
+    ${datoRow('Entre calle', entreCalle)}
+    ${datoRow('Localidad', d.localidad)}
+    ${datoRow('Horario de entrega', d.horario_entrega)}
+    ${datoRow('Ramo', d.ramo)}
+    ${datoRow('Categoría', d.categoria_cliente)}
+    ${datoRow('Vendedor', d.personal_comercial)}
+    ${datoRow('Día de visita', d.dias_visita)}
+  `;
+}
 // ---------- Pantalla 2b: historico del cliente (mes actual vs mes anterior) ----------
 document.getElementById('btnHistorico').onclick = () => { if (currentClienteId) openHistorico(currentClienteId); };
 document.getElementById('btnBackFromHistorico').onclick = goBack;
