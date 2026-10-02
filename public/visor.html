@@ -1447,7 +1447,7 @@ function getDenseRows(ws){
 // exacta y una tilde de mas/de menos hacia que la columna "no se encontrara"
 // sin ningun error (quedaba vacia en silencio, por ser columna opcional).
 function normalizarEncabezado(s){
-  return String(s == null ? '' : s).trim().toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+  return String(s == null ? '' : s).trim().toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/\s+/g, ' ');
 }
 function findColIndex(headerRow, name){
   if(!Array.isArray(headerRow)) throw new Error('No se encontró la fila de encabezados (fila 1) en el archivo.');
@@ -1553,6 +1553,15 @@ async function procesarUniverso(){
       });
     }
     if(!clientes.length) throw new Error('No se encontraron filas con código de cliente.');
+    // Columnas opcionales que no se encontraron en el encabezado del archivo -
+    // se avisa en el mensaje final (en vez de quedar vacias en silencio) para
+    // poder diagnosticar un nombre de columna que no matchea sin tener que
+    // adivinar.
+    const OPCIONALES = {
+      calle: 'Calle', calle1: 'Calle 1', calle2: 'Calle 2', localidad: 'Descripcion localidad',
+      horario: 'Horario de entrega', ramo: 'Descripcion ramo', categoriaCliente: 'Descripcion categoria',
+    };
+    const noEncontradas = Object.keys(OPCIONALES).filter(k => idx[k] < 0).map(k => OPCIONALES[k]);
     showMsg('universoMsg', `Actualizando ${clientes.length} clientes...`, true);
     const res = await fetch(API + '/api/referencia/universo', {
       method: 'POST', headers: {'Content-Type':'application/json', ...authHeaders()},
@@ -1560,7 +1569,8 @@ async function procesarUniverso(){
     });
     const data = await res.json();
     if(!res.ok){ showMsg('universoMsg', data.error || 'Error', false); return; }
-    showMsg('universoMsg', `Clientes actualizados: ${data.cantidad}`, true);
+    const avisoCols = noEncontradas.length ? ` · Columnas opcionales no encontradas en el archivo: ${noEncontradas.join(', ')}` : '';
+    showMsg('universoMsg', `Clientes actualizados: ${data.cantidad}${avisoCols}`, true);
   }catch(e){
     showMsg('universoMsg', 'Error: ' + e.message, false);
   }
