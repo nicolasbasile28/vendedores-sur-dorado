@@ -430,7 +430,7 @@
         <button onclick="procesarUniverso()">Actualizar</button>
       </div>
       <div id="universoMsg" class="msg"></div>
-      <p class="note">El archivo debe tener las columnas Cliente, Razon social, Domicilio, "Fuerza de venta 1 Descripcion personal comercial" y "Fuerza de venta 1 Dias de visita". Si además tiene Calle, Calle 1, Calle 2, Descripcion localidad, Horario de entrega, Descripcion de ramo y Descripcion categoria, esos datos también se guardan y se muestran en la pantalla "Datos" de cada cliente en la app de vendedores (son opcionales). Se usa para agregar clientes nuevos y actualizar los existentes. Los clientes que no aparezcan en el archivo no se borran.</p>
+      <p class="note">El archivo debe tener las columnas Cliente, Razon social, Domicilio, "Fuerza de venta 1 Descripcion personal comercial" y "Fuerza de venta 1 Dias de visita". Si además tiene Calle, Calle 1, Calle 2, Descripcion localidad, Horario de entrega, Descripcion ramo y Descripcion categoria, esos datos también se guardan y se muestran en la pantalla "Datos" de cada cliente en la app de vendedores (son opcionales). Se usa para agregar clientes nuevos y actualizar los existentes. Los clientes que no aparezcan en el archivo no se borran.</p>
     </div>
 
     <div class="section" id="adminSupRefSection" style="display:none;">
@@ -1440,9 +1440,19 @@ function getDenseRows(ws){
   if(!Array.isArray(rows)) throw new Error('No se pudo interpretar el contenido de la hoja.');
   return rows;
 }
+// Normaliza (espacios, mayusculas/minusculas, acentos) antes de comparar -
+// "Descripcion categoria" y "Descripcion categoría" (o cualquier diferencia
+// de tildes/mayusculas entre lo que mandamos nosotros y como esta el
+// encabezado real en el archivo) matchean igual. Antes era comparacion
+// exacta y una tilde de mas/de menos hacia que la columna "no se encontrara"
+// sin ningun error (quedaba vacia en silencio, por ser columna opcional).
+function normalizarEncabezado(s){
+  return String(s == null ? '' : s).trim().toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+}
 function findColIndex(headerRow, name){
   if(!Array.isArray(headerRow)) throw new Error('No se encontró la fila de encabezados (fila 1) en el archivo.');
-  for(let i=0;i<headerRow.length;i++){ if(headerRow[i] === name) return i; }
+  const buscado = normalizarEncabezado(name);
+  for(let i=0;i<headerRow.length;i++){ if(normalizarEncabezado(headerRow[i]) === buscado) return i; }
   return -1;
 }
 
@@ -1516,7 +1526,7 @@ async function procesarUniverso(){
       calle2: findColIndex(header, 'Calle 2'),
       localidad: findColIndex(header, 'Descripcion localidad'),
       horario: findColIndex(header, 'Horario de entrega'),
-      ramo: findColIndex(header, 'Descripcion de ramo'),
+      ramo: findColIndex(header, 'Descripcion ramo'),
       categoriaCliente: findColIndex(header, 'Descripcion categoria'),
     };
     if(idx.cliente < 0 || idx.razonSocial < 0 || idx.domicilio < 0 || idx.vendedor < 0 || idx.dia < 0){
