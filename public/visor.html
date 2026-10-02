@@ -1455,6 +1455,18 @@ function findColIndex(headerRow, name){
   for(let i=0;i<headerRow.length;i++){ if(normalizarEncabezado(headerRow[i]) === buscado) return i; }
   return -1;
 }
+// Cuenta TODAS las columnas del encabezado que matchean "name" (no solo la
+// primera, a diferencia de findColIndex). Si un archivo tiene 2 columnas con
+// el mismo nombre (pasa en exportes de ERP con columnas repetidas de otros
+// reportes), findColIndex siempre toma la primera, que puede ser la columna
+// equivocada y estar vacia aunque la columna "correcta" (mas adelante en el
+// archivo) si tenga datos. Se usa solo para diagnostico.
+function contarColIndices(headerRow, name){
+  const buscado = normalizarEncabezado(name);
+  let n = 0;
+  for(let i=0;i<headerRow.length;i++){ if(normalizarEncabezado(headerRow[i]) === buscado) n++; }
+  return n;
+}
 
 // El archivo de ventas real pesa 15-25MB con ~260 columnas y hasta ~100.000
 // filas. Se probo parsearlo en el navegador con esta misma libreria (SheetJS)
@@ -1558,10 +1570,25 @@ async function procesarUniverso(){
     // poder diagnosticar un nombre de columna que no matchea sin tener que
     // adivinar.
     const OPCIONALES = {
-      calle: 'Calle', calle1: 'Calle 1', calle2: 'Calle 2', localidad: 'Descripcion localidad',
-      horario: 'Horario de entrega', ramo: 'Descripcion ramo', categoriaCliente: 'Descripcion categoria',
+      calle: {nombre: 'Calle', campo: 'calle'},
+      calle1: {nombre: 'Calle 1', campo: 'calle1'},
+      calle2: {nombre: 'Calle 2', campo: 'calle2'},
+      localidad: {nombre: 'Descripcion localidad', campo: 'localidad'},
+      horario: {nombre: 'Horario de entrega', campo: 'horario_entrega'},
+      ramo: {nombre: 'Descripcion ramo', campo: 'ramo'},
+      categoriaCliente: {nombre: 'Descripcion categoria', campo: 'categoria_cliente'},
     };
-    const noEncontradas = Object.keys(OPCIONALES).filter(k => idx[k] < 0).map(k => OPCIONALES[k]);
+    const noEncontradas = [];
+    const duplicadas = [];
+    const encontradasPeroVacias = [];
+    for(const k of Object.keys(OPCIONALES)){
+      const {nombre, campo} = OPCIONALES[k];
+      if(idx[k] < 0){ noEncontradas.push(nombre); continue; }
+      const matches = contarColIndices(header, nombre);
+      if(matches > 1){ duplicadas.push(`${nombre} (${matches} columnas con ese nombre)`); }
+      const conValor = clientes.some(c => c[campo]);
+      if(!conValor){ encontradasPeroVacias.push(nombre); }
+    }
     showMsg('universoMsg', `Actualizando ${clientes.length} clientes...`, true);
     const res = await fetch(API + '/api/referencia/universo', {
       method: 'POST', headers: {'Content-Type':'application/json', ...authHeaders()},
@@ -1569,7 +1596,10 @@ async function procesarUniverso(){
     });
     const data = await res.json();
     if(!res.ok){ showMsg('universoMsg', data.error || 'Error', false); return; }
-    const avisoCols = noEncontradas.length ? ` · Columnas opcionales no encontradas en el archivo: ${noEncontradas.join(', ')}` : '';
+    let avisoCols = '';
+    if(noEncontradas.length) avisoCols += ` · Columnas no encontradas: ${noEncontradas.join(', ')}`;
+    if(duplicadas.length) avisoCols += ` · OJO, aparecen repetidas en el archivo (puede estar tomando la columna equivocada): ${duplicadas.join(', ')}`;
+    if(encontradasPeroVacias.length) avisoCols += ` · Encontradas pero vacías en TODOS los clientes: ${encontradasPeroVacias.join(', ')}`;
     showMsg('universoMsg', `Clientes actualizados: ${data.cantidad}${avisoCols}`, true);
   }catch(e){
     showMsg('universoMsg', 'Error: ' + e.message, false);
