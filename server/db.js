@@ -58,6 +58,29 @@ for (const col of columnasNuevas) {
     // La columna ya existe, no hace falta hacer nada
   }
 }
+
+// Mismo mecanismo de migracion, para los datos extra del archivo "universo"
+// (pantalla "Datos" del cliente en la app de vendedores + horario de entrega
+// en el listado principal): calle/calle1/calle2 (direccion y entre calles),
+// localidad, horario de entrega, ramo y la "Descripcion categoria" del
+// cliente (NO tiene relacion con la categoria de producto Cervezas/Aguas/
+// Vinos/Sidras - por eso se llama categoria_cliente, para no confundirlas).
+const columnasNuevasClientes = [
+  { nombre: 'calle', tipo: 'TEXT' },
+  { nombre: 'calle1', tipo: 'TEXT' },
+  { nombre: 'calle2', tipo: 'TEXT' },
+  { nombre: 'localidad', tipo: 'TEXT' },
+  { nombre: 'horario_entrega', tipo: 'TEXT' },
+  { nombre: 'ramo', tipo: 'TEXT' },
+  { nombre: 'categoria_cliente', tipo: 'TEXT' },
+];
+for (const col of columnasNuevasClientes) {
+  try {
+    db.exec(`ALTER TABLE clientes ADD COLUMN ${col.nombre} ${col.tipo}`);
+  } catch (e) {
+    // La columna ya existe, no hace falta hacer nada
+  }
+}
 db.exec(`
   CREATE INDEX IF NOT EXISTS idx_ventas_periodo ON ventas(anio, mes);
   CREATE INDEX IF NOT EXISTS idx_ventas_supervisor ON ventas(supervisor);
