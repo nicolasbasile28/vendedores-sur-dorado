@@ -375,13 +375,23 @@ route('GET', '/api/cliente/:id/historico/marca/:marca', async (req, res, params)
     filas,
   });
 });
-function guardarVentas({ clientes, ventas, mes_actual, mes, anio, dias_venta_reales }) {
+// "mes"/"anio" = ultimo periodo del archivo (pasa a ser el "mes actual").
+// Un mismo archivo puede traer filas de varios meses (ej: septiembre
+// completo + los primeros dias de octubre): cada fila ya viene con su propio
+// mes/anio, y se reemplazan TODOS los periodos presentes en el archivo.
+// dias_por_periodo = { 'YYYY-MM': dias con venta } para cada periodo.
+function guardarVentas({ clientes, ventas, mes_actual, mes, anio, dias_venta_reales, dias_por_periodo }) {
   if (!Array.isArray(clientes) || !Array.isArray(ventas)) {
     throw new Error('Formato invalido: se esperaba {clientes:[], ventas:[]}');
   }
   db.exec('BEGIN');
   try {
-    if (mes && anio) {
+    const periodosArchivo = new Set();
+    for (const v of ventas) { if (v.mes && v.anio) periodosArchivo.add(Number(v.anio) * 100 + Number(v.mes)); }
+    if (periodosArchivo.size) {
+      const delPeriodo = db.prepare('DELETE FROM ventas WHERE mes = ? AND anio = ?');
+      for (const p of periodosArchivo) delPeriodo.run(p % 100, Math.floor(p / 100));
+    } else if (mes && anio) {
       db.prepare('DELETE FROM ventas WHERE mes = ? AND anio = ?').run(Number(mes), Number(anio));
     } else {
       db.exec('DELETE FROM ventas');
@@ -422,7 +432,12 @@ function guardarVentas({ clientes, ventas, mes_actual, mes, anio, dias_venta_rea
       setMeta.run('mes_actual_num', String(mes));
       setMeta.run('anio_actual_num', String(anio));
     }
-    if (mes && anio && dias_venta_reales) {
+    if (dias_por_periodo) {
+      for (const [k, dias] of Object.entries(dias_por_periodo)) {
+        const [a, m] = k.split('-');
+        if (dias) setMeta.run(`dias_reales_${a}_${m}`, String(dias));
+      }
+    } else if (mes && anio && dias_venta_reales) {
       setMeta.run(`dias_reales_${anio}_${String(mes).padStart(2, '0')}`, String(dias_venta_reales));
     }
     if (mes && anio) {
@@ -476,12 +491,12 @@ function nuevoAcumuladorVentas() {
     FALLBACK: 'SIN ASIGNAR (no en tabla de referencia)',
     vendAppAgg: new Map(),
     ventaDepositoVend: new Set(),
-    fechaSet: new Set(),
+    fechasPorMes: {},
     mesCount: {},
   };
 }
 function fechaAStr(d) {
-    return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
+  return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
 }
 function agregarFilaVenta(acc, f) {
   const cat = CAT_MAP_SERVIDOR[f.division];
@@ -504,51 +519,78 @@ function agregarFilaVenta(acc, f) {
     if (/^\d{4}-\d{2}-\d{2}$/.test(fRaw.trim())) dstr = fRaw.trim();
     else { const p = new Date(fRaw); if (!isNaN(p)) dstr = fechaAStr(p); }
   }
+  // Cada fila va al mes de SU fecha (clave "YYYY-MM"); sin fecha valida
+  // queda con clave '' y finalizarYGuardar la manda al mes con mas filas.
+  const mkey = dstr ? dstr.slice(0, 7) : '';
   if (dstr) {
-    acc.fechaSet.add(dstr);
-    const mkey = dstr.slice(0, 7);
+    if (!acc.fechasPorMes[mkey]) acc.fechasPorMes[mkey] = new Set();
+    acc.fechasPorMes[mkey].add(dstr);
     acc.mesCount[mkey] = (acc.mesCount[mkey] || 0) + 1;
   }
 
   if (f.cliente !== undefined && f.cliente !== null && f.cliente !== '') {
     const articulo = f.articulo || 'SIN ARTICULO';
-    const vaKey = f.cliente + '|' + cat + '|' + marca + '|' + articulo + '|' + vendedor + '|' + transp + '|' + fiscal + '|' + canal;
+    const vaKey = f.cliente + '|' + cat + '|' + marca + '|' + articulo + '|' + vendedor + '|' + transp + '|' + fiscal + '|' + canal + '|' + mkey;
     acc.vendAppAgg.set(vaKey, (acc.vendAppAgg.get(vaKey) || 0) + um);
   }
 }
 function finalizarYGuardar(acc) {
+  const NOMBRES = ['Enero', 'Febrero', 'Marzo', 'Abril', 'Mayo', 'Junio', 'Julio', 'Agosto', 'Septiembre', 'Octubre', 'Noviembre', 'Diciembre'];
+  const nombrePeriodo = (k) => { const [y, m] = k.split('-').map(Number); return NOMBRES[m - 1] + ' ' + y; };
+  // "Mes actual" = el ULTIMO mes con fechas en el archivo (no el que mas filas
+  // tiene): un archivo con septiembre completo + primeros dias de octubre
+  // tiene que quedar con octubre como mes en curso.
+  const periodosConFecha = Object.keys(acc.fechasPorMes).sort();
+  const ultimoKey = periodosConFecha.length ? periodosConFecha[periodosConFecha.length - 1] : null;
+  const masFilasEntry = Object.entries(acc.mesCount).sort((a, b) => b[1] - a[1])[0];
+  const keySinFecha = masFilasEntry ? masFilasEntry[0] : null;
   let mesActual = '', mesNumOut = null, anioNumOut = null;
-  const bestMesEntry = Object.entries(acc.mesCount).sort((a, b) => b[1] - a[1])[0];
-  if (bestMesEntry) {
-    const [y, m] = bestMesEntry[0].split('-').map(Number);
-    const NOMBRES = ['Enero', 'Febrero', 'Marzo', 'Abril', 'Mayo', 'Junio', 'Julio', 'Agosto', 'Septiembre', 'Octubre', 'Noviembre', 'Diciembre'];
-    mesActual = NOMBRES[m - 1] + ' ' + y;
+  if (ultimoKey) {
+    const [y, m] = ultimoKey.split('-').map(Number);
+    mesActual = nombrePeriodo(ultimoKey);
     mesNumOut = m; anioNumOut = y;
   }
 
   const ventas = [];
+  const filasPorPeriodo = {};
   for (const [vaKey, um] of acc.vendAppAgg.entries()) {
     if (um < 0.001) continue;
-    const [cliente_id, categoria, marca, articulo, vendedor, camionero, fiscalStr, canal] = vaKey.split('|');
+    const [cliente_id, categoria, marca, articulo, vendedor, camionero, fiscalStr, canal, mkeyFila] = vaKey.split('|');
     let supervisor;
     if (acc.ventaDepositoVend.has(vendedor)) supervisor = 'VENTA DEPOSITO';
     else supervisor = acc.supRef[normNameServidor(vendedor)] || acc.FALLBACK;
+    const pk = mkeyFila || keySinFecha;
+    let mesFila = null, anioFila = null;
+    if (pk) { const [y, m] = pk.split('-').map(Number); mesFila = m; anioFila = y; filasPorPeriodo[pk] = (filasPorPeriodo[pk] || 0) + 1; }
     ventas.push({
       cliente_id, categoria, marca, articulo,
       um_hl: Math.round(um * 1000) / 1000,
       supervisor, camionero, canal,
       tipo_documento: fiscalStr === '1' ? 'FISCAL' : 'NO FISCAL',
-      mes: mesNumOut, anio: anioNumOut,
+      mes: mesFila, anio: anioFila,
     });
   }
 
+  const diasPorPeriodo = {};
+  for (const k of periodosConFecha) diasPorPeriodo[k] = acc.fechasPorMes[k].size;
+
   let resultado;
   try {
-    resultado = guardarVentas({ clientes: [], ventas, mes_actual: mesActual, mes: mesNumOut, anio: anioNumOut, dias_venta_reales: acc.fechaSet.size });
+    resultado = guardarVentas({
+      clientes: [], ventas, mes_actual: mesActual, mes: mesNumOut, anio: anioNumOut,
+      dias_venta_reales: ultimoKey ? diasPorPeriodo[ultimoKey] : 0,
+      dias_por_periodo: diasPorPeriodo,
+    });
   } catch (e) {
     throw { status: 500, error: 'Error guardando datos: ' + e.message };
   }
-  return { ok: true, mes_actual: mesActual, ventas: resultado.ventas };
+  // Texto para el mensaje "Listo. <mes_actual>: N filas guardadas." de la
+  // pantalla: con varios meses en el archivo muestra el desglose por mes.
+  const keysGuardadas = Object.keys(filasPorPeriodo).sort();
+  const etiqueta = keysGuardadas.length > 1
+    ? keysGuardadas.map((k) => nombrePeriodo(k) + ' (' + filasPorPeriodo[k] + ')').join(' + ')
+    : mesActual;
+  return { ok: true, mes_actual: etiqueta, ventas: resultado.ventas };
 }
 
 // Nota sobre memoria: el archivo de ventas tiene ~260 columnas pero solo se
@@ -963,7 +1005,8 @@ route('GET', '/api/kpis', async (req, res) => {
   const diasConfigurados = diasConfigRow ? Number(diasConfigRow.value) : null;
   // dias_venta_reales se guarda por UN mes puntual al subir el archivo - con
   // varios meses seleccionados no hay forma confiable de sumarlo, asi que
-        let diasReales = null;
+  // queda null (y el proyectado tambien) salvo que se haya elegido un solo mes.
+  let diasReales = null;
   if (soloUnMes) {
     const diasRealesRow = db.prepare('SELECT value FROM meta WHERE key = ?').get(`dias_reales_${periodos[0].anio}_${String(periodos[0].mes).padStart(2, '0')}`);
     diasReales = diasRealesRow ? Number(diasRealesRow.value) : null;
@@ -1447,7 +1490,7 @@ route('GET', '/api/canal-compradores', async (req, res) => {
         SELECT v.canal as canal, v.cliente_id as cliente_id, SUM(v.um_hl) as hl
         FROM ventas v ${join}
         WHERE 1=1${pClause}${clause}
-                GROUP BY v.canal, v.cliente_id
+        GROUP BY v.canal, v.cliente_id
         HAVING SUM(v.um_hl) >= 0.001
       ) GROUP BY canal
     `).all(...pParams, ...params);
