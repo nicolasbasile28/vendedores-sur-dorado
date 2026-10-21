@@ -8,6 +8,7 @@ const authLib = require('./auth');
 const XLSX = require('xlsx');
 const ExcelJS = require('exceljs');
 const crypto = require('crypto');
+const os = require('os');
 const PORT = process.env.PORT || 3000;
 const PUBLIC_DIR = path.join(__dirname, '..', 'public');
 function sendJson(res, status, obj) {
@@ -797,6 +798,23 @@ try {
   }
 } catch (e) {}
 
+// exceljs (lectura streaming) descomprime la hoja de ventas en la carpeta
+// temporal del sistema (/tmp/tmp-<pid>-xxxx, ~300MB por archivo de ventas) y
+// NO la borra mientras el servidor sigue andando. En Render /tmp tiene un
+// limite de 2GB: con 6-7 subidas se llena y la instancia se reinicia sola
+// ("Size of temporary storage volume /tmp exceeded the limit of 2GB"). Por eso
+// se anota que carpetas habia antes de procesar y se borran las nuevas al
+// terminar (con exito o con error).
+function listarTmpExcelJS() {
+  try { return fs.readdirSync(os.tmpdir()).filter((f) => /^tmp-\d+-/.test(f)); } catch (e) { return []; }
+}
+function limpiarTmpExcelJS(antes) {
+  for (const f of listarTmpExcelJS()) {
+    if (antes.has(f)) continue;
+    try { fs.rmSync(path.join(os.tmpdir(), f), { recursive: true, force: true }); } catch (e) {}
+  }
+}
+
 function tmpPathFor(uploadId) {
   if (!/^[a-f0-9]{32}$/.test(uploadId)) return null;
   return path.join(TMP_DIR, uploadId + '.bin');
@@ -849,6 +867,7 @@ route('POST', '/api/upload-excel/finish', async (req, res) => {
   const filePath = tmpPathFor(uploadId);
   if (!filePath || !fs.existsSync(filePath)) return sendJson(res, 400, { error: 'uploadId invalido o expirado' });
 
+  const tmpAntes = new Set(listarTmpExcelJS());
   uploadJobs.set(uploadId, { status: 'procesando' });
   // Responder ya: procesarExcelYGuardar puede tardar varios minutos con
   // archivos grandes y superar el timeout del proxy, que devuelve HTML
@@ -864,6 +883,7 @@ route('POST', '/api/upload-excel/finish', async (req, res) => {
   } finally {
     try { fs.unlinkSync(filePath); } catch (e) {}
     uploadFilenames.delete(uploadId);
+    limpiarTmpExcelJS(tmpAntes);
   }
 });
 
