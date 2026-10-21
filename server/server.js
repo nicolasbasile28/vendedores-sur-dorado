@@ -469,7 +469,6 @@ route('POST', '/api/upload', async (req, res) => {
   }
   sendJson(res, 200, { ok: true, clientes: resultado.clientes, ventas: resultado.ventas });
 });
-
 const CAT_MAP_SERVIDOR = { 'CERVEZA': 'Cervezas', 'AGUA': 'Aguas', 'VINOS': 'Vinos', 'SIDRAS': 'Sidras' };
 const normNameServidor = s => (s || '').toString().toUpperCase().trim().split(/\s+/).sort().join(' ');
 
@@ -696,27 +695,35 @@ async function procesarExcelYGuardarStreaming(filePath, nombreOriginal) {
   }
 
   const acc = nuevoAcumuladorVentas();
-  const idx = {};
+  let idx = {};
   let headerLeida = false;
   let filasLeidas = 0;
+  let faltante = null;
 
   let workbookReader;
   try {
     workbookReader = new ExcelJS.stream.xlsx.WorkbookReader(filePath, {});
+    // Un libro puede traer mas de una hoja y exceljs las entrega en el orden
+    // en que aparecen DENTRO del zip, que no siempre es el orden de las
+    // pestañas (ej: una hoja auxiliar "ID", solo con encabezados, puede venir
+    // antes que "SABANA", la de ventas). Por eso se prueba hoja por hoja y se
+    // procesa la primera que realmente tenga filas de ventas.
     for await (const worksheetReader of workbookReader) {
+      let headerHoja = false;
+      idx = {};
       for await (const row of worksheetReader) {
         const vals = row.values;
-        if (!headerLeida) {
+        if (!headerHoja) {
+          headerHoja = true;
           headerLeida = true;
           for (let c = 1; c < vals.length; c++) {
             const nombre = cellValStreaming(vals[c]);
             if (COLUMNAS_VENTAS_REQUERIDAS.includes(nombre) || COLUMNAS_VENTAS_OPCIONALES.includes(nombre)) idx[nombre] = c;
           }
-          for (const nombre of COLUMNAS_VENTAS_REQUERIDAS) {
-            if (idx[nombre] === undefined) throw { status: 400, error: 'Falta la columna requerida: ' + nombre };
-          }
+          faltante = COLUMNAS_VENTAS_REQUERIDAS.find((nombre) => idx[nombre] === undefined) || null;
           continue;
         }
+        if (faltante) continue;
         const division = cellValStreaming(vals[idx['Descripción DIVISION']]);
         if (division === undefined) continue;
         filasLeidas++;
@@ -735,7 +742,7 @@ async function procesarExcelYGuardarStreaming(filePath, nombreOriginal) {
           canal: idx['Descripcion Canal MKT'] !== undefined ? cellValStreaming(vals[idx['Descripcion Canal MKT']]) : null,
         });
       }
-      break; // solo se procesa la primera hoja
+      if (filasLeidas > 0) break;
     }
   } catch (e) {
     if (e && e.status) throw e;
@@ -751,6 +758,7 @@ async function procesarExcelYGuardarStreaming(filePath, nombreOriginal) {
   }
 
   if (!headerLeida) throw { status: 400, error: 'El archivo está vacío o no se pudo leer (no se encontró ninguna fila).' };
+  if (filasLeidas === 0 && faltante) throw { status: 400, error: 'Falta la columna requerida: ' + faltante };
   if (filasLeidas === 0) throw { status: 400, error: 'El archivo no tiene filas de ventas para las categorías conocidas.' };
   return finalizarYGuardar(acc);
 }
@@ -977,7 +985,6 @@ route('GET', '/api/filtros/opciones', async (req, res) => {
   for (const k in vendedoresPorSupervisor) vendedoresPorSupervisor[k].sort();
   sendJson(res, 200, { supervisores, camioneros, vendedores, dias, vendedores_por_supervisor: vendedoresPorSupervisor });
 });
-
 // Lista de pares (mes, anio) que realmente tienen datos cargados - usado por
 // el frontend para armar el selector de periodo (solo se puede elegir un
 // periodo que exista, no hace falta un selector de año separado).
@@ -1453,7 +1460,6 @@ route('GET', '/api/canal', async (req, res) => {
     filas, total_general: totalGeneral,
   });
 });
-
 route('GET', '/api/canal-compradores', async (req, res) => {
   if (!requireAuth(req, res, ['admin', 'supervisor', 'vendedor'])) return;
   const parsed = url.parse(req.url, true);
