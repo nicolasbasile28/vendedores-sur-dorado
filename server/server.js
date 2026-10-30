@@ -1401,6 +1401,25 @@ route('GET', '/api/compradores', async (req, res) => {
   sendJson(res, 200, { categorias: resultado, total: totalRows.length });
 });
 
+// Historial de compras de una lista de clientes (hasta 13 meses, lo que guarda
+// la tabla ventas): por cliente, mes y marca devuelve el volumen neto (ya
+// descontadas devoluciones). Solo admin/supervisor; se usa para cruzar una
+// lista de clientes contra "que compraron y cuando" (la tabla no guarda el dia
+// exacto, solo mes y año).
+route('POST', '/api/clientes-compras', async (req, res) => {
+  if (!requireAuth(req, res, ['admin', 'supervisor'])) return;
+  const body = JSON.parse((await readBody(req)).toString('utf-8') || '{}');
+  const ids = Array.isArray(body.ids) ? body.ids.map(String).filter(Boolean).slice(0, 5000) : [];
+  if (!ids.length) return sendJson(res, 400, { error: 'Falta ids (array de codigos de cliente)' });
+  const rows = db.prepare(`
+    SELECT cliente_id, anio, mes, categoria, marca, SUM(um_hl) as hl FROM ventas
+    WHERE cliente_id IN (${ids.map(() => '?').join(',')})
+    GROUP BY cliente_id, anio, mes, categoria, marca HAVING SUM(um_hl) >= 0.001
+    ORDER BY cliente_id, anio, mes
+  `).all(...ids);
+  sendJson(res, 200, rows.map(r => [r.cliente_id, r.anio, r.mes, r.categoria, r.marca, Math.round(r.hl * 1000) / 1000]));
+});
+
 function periodoMesAnterior(mes, anio) {
   let mesAnteriorNum = mes - 1, anioMesAnterior = anio;
   if (mesAnteriorNum < 1) { mesAnteriorNum = 12; anioMesAnterior = anio - 1; }
